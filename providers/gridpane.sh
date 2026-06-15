@@ -5,6 +5,9 @@ GRIDPANE_WEB_ROOT=""
 GRIDPANE_ROOT_EXTRA_FILES=()
 GRIDPANE_ROOT_EXTRA_CANDIDATES=()
 GRIDPANE_MU_PLUGINS_PRESENT=0
+GRIDPANE_ARCHIVED_ASSETS_DIR=""
+GRIDPANE_WP_CONFIG_PATH=""
+GRIDPANE_USER_CONFIGS_PATH=""
 
 gridpane_detect() {
   local index_file="$1"
@@ -21,9 +24,24 @@ gridpane_load_layout() {
   GRIDPANE_ROOT_EXTRA_FILES=()
   GRIDPANE_ROOT_EXTRA_CANDIDATES=()
   GRIDPANE_MU_PLUGINS_PRESENT=0
+  GRIDPANE_ARCHIVED_ASSETS_DIR=""
+  GRIDPANE_WP_CONFIG_PATH=""
+  GRIDPANE_USER_CONFIGS_PATH=""
 
   [[ -n "$GRIDPANE_DB_DIR" ]] || die "Could not find GridPane database-* directory in archive"
   grep -Eq '^\./htdocs/wp-content/|^htdocs/wp-content/' "$index_file" || die "Could not find htdocs/wp-content in archive"
+  GRIDPANE_ARCHIVED_ASSETS_DIR="$(grep -E '^\./[^/]+-archived-assets/|^[^/]+-archived-assets/' "$index_file" | head -n 1 | sed -E 's#^\./##; s#/.*$##')"
+
+  if grep -Eq '^\./htdocs/wp-config\.php$|^htdocs/wp-config\.php$' "$index_file"; then
+    GRIDPANE_WP_CONFIG_PATH="htdocs/wp-config.php"
+  elif [[ -n "$GRIDPANE_ARCHIVED_ASSETS_DIR" ]] && grep -Eq "^\\./${GRIDPANE_ARCHIVED_ASSETS_DIR}/wp-config\\.php$|^${GRIDPANE_ARCHIVED_ASSETS_DIR}/wp-config\\.php$" "$index_file"; then
+    GRIDPANE_WP_CONFIG_PATH="$GRIDPANE_ARCHIVED_ASSETS_DIR/wp-config.php"
+  fi
+
+  if [[ -n "$GRIDPANE_ARCHIVED_ASSETS_DIR" ]] && grep -Eq "^\\./${GRIDPANE_ARCHIVED_ASSETS_DIR}/user-configs\\.php$|^${GRIDPANE_ARCHIVED_ASSETS_DIR}/user-configs\\.php$" "$index_file"; then
+    GRIDPANE_USER_CONFIGS_PATH="$GRIDPANE_ARCHIVED_ASSETS_DIR/user-configs.php"
+  fi
+
   if grep -Eq '^\./htdocs/wp-content/mu-plugins(/|$)|^htdocs/wp-content/mu-plugins(/|$)' "$index_file"; then
     GRIDPANE_MU_PLUGINS_PRESENT=1
   fi
@@ -45,6 +63,9 @@ gridpane_load_layout() {
 
   report "GridPane database directory: $GRIDPANE_DB_DIR"
   report "GridPane web root: $GRIDPANE_WEB_ROOT"
+  report "GridPane archived assets directory: ${GRIDPANE_ARCHIVED_ASSETS_DIR:-none}"
+  report "GridPane wp-config source: ${GRIDPANE_WP_CONFIG_PATH:-none}"
+  report "GridPane user-configs source: ${GRIDPANE_USER_CONFIGS_PATH:-none}"
   report "GridPane mu-plugins present: $GRIDPANE_MU_PLUGINS_PRESENT"
   if [[ "${#GRIDPANE_ROOT_EXTRA_FILES[@]}" -gt 0 ]]; then
     report "GridPane auto root extra files: ${GRIDPANE_ROOT_EXTRA_FILES[*]}"
@@ -141,11 +162,18 @@ gridpane_extract() {
 
   local paths=(
     "$GRIDPANE_DB_DIR"
-    "$GRIDPANE_WEB_ROOT/wp-config.php"
     "$GRIDPANE_WEB_ROOT/wp-content/plugins"
     "$GRIDPANE_WEB_ROOT/wp-content/themes"
     "$GRIDPANE_WEB_ROOT/wp-content/uploads"
   )
+
+  if [[ -n "$GRIDPANE_WP_CONFIG_PATH" ]]; then
+    paths+=("$GRIDPANE_WP_CONFIG_PATH")
+  fi
+
+  if [[ -n "$GRIDPANE_USER_CONFIGS_PATH" ]]; then
+    paths+=("$GRIDPANE_USER_CONFIGS_PATH")
+  fi
 
   if [[ "$include_mu_plugins" -eq 1 ]]; then
     paths+=("$GRIDPANE_WEB_ROOT/wp-content/mu-plugins")

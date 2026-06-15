@@ -22,10 +22,12 @@ usage() {
   cat <<'EOF' | sed "s/@@PROG@@/$PROG_NAME/g"
 Usage:
   @@PROG@@ restore ARCHIVE.tar.gz --target-root=/srv/htdocs [options]
+  @@PROG@@ doctor --target-root=/srv/htdocs [--archive=ARCHIVE.tar.gz]
 
 Options:
   --provider=auto|gridpane          Export provider adapter to use. Default: auto
   --target-root=PATH                WordPress document root to restore into
+  --archive=PATH                    Archive path for doctor preflight checks
   --stage-dir=PATH                  Staging directory. Default: target-root/restore-<archive>-<timestamp>
   --db-output=PATH                  Combined SQL output path. Default: stage/<archive>-combined-phpmyadmin-import.sql
   --old-url=URL                     Old URL for WP-CLI search-replace
@@ -55,6 +57,34 @@ EOF
 
 if [[ "$COMMAND" == "--help" || "$COMMAND" == "-h" || -z "$COMMAND" ]]; then
   usage
+  exit 0
+fi
+
+if [[ "$COMMAND" == "doctor" ]]; then
+  TARGET_ROOT=""
+  ARCHIVE=""
+  IMPORT_DB=0
+  SEARCH_REPLACE=0
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --target-root=*) TARGET_ROOT="${1#*=}" ;;
+      --archive=*) ARCHIVE="${1#*=}" ;;
+      --import-db) IMPORT_DB=1 ;;
+      --search-replace) SEARCH_REPLACE=1 ;;
+      --help|-h) usage; exit 0 ;;
+      *) die "Unknown option for doctor: $1" ;;
+    esac
+    shift
+  done
+
+  [[ -n "$TARGET_ROOT" ]] || die "doctor requires --target-root"
+  TARGET_ROOT="$(abs_path "$TARGET_ROOT")"
+  if [[ -n "$ARCHIVE" ]]; then
+    ARCHIVE="$(abs_path "$ARCHIVE")"
+  fi
+  preflight_environment "$TARGET_ROOT" "$ARCHIVE" "$IMPORT_DB" "$SEARCH_REPLACE"
+  log "Doctor completed"
   exit 0
 fi
 
@@ -118,6 +148,14 @@ case "$ROOT_EXTRAS_MODE" in ask|copy|skip) ;; *) die "--root-extras must be ask,
 need_cmd tar
 need_cmd perl
 need_cmd rsync
+need_cmd grep
+need_cmd sed
+need_cmd find
+need_cmd sort
+need_cmd comm
+need_cmd diff
+need_cmd date
+need_cmd head
 
 ARCHIVE="$(abs_path "$ARCHIVE")"
 TARGET_ROOT="$(abs_path "$TARGET_ROOT")"
@@ -140,6 +178,8 @@ log "Stage dir: $STAGE_DIR"
 report "Archive: $ARCHIVE"
 report "Target root: $TARGET_ROOT"
 report "Stage dir: $STAGE_DIR"
+
+preflight_environment "$TARGET_ROOT" "$ARCHIVE" "$IMPORT_DB" "$SEARCH_REPLACE"
 
 archive_index "$ARCHIVE" "$STAGE_DIR"
 
@@ -176,10 +216,22 @@ verify_database_sql "$DB_OUTPUT"
 
 merge_wp_content "$STAGE_DIR/$GRIDPANE_WEB_ROOT/wp-content" "$TARGET_ROOT/wp-content"
 copy_web_root_files "$STAGE_DIR/$GRIDPANE_WEB_ROOT" "$TARGET_ROOT" "${GRIDPANE_ROOT_EXTRA_FILES[@]}"
-wp_config_report "$STAGE_DIR/$GRIDPANE_WEB_ROOT/wp-config.php" "$TARGET_ROOT/wp-config.php" "$STAGE_DIR"
+SOURCE_WP_CONFIG=""
+SOURCE_USER_CONFIGS=""
+if [[ -n "${GRIDPANE_WP_CONFIG_PATH:-}" ]]; then
+  SOURCE_WP_CONFIG="$STAGE_DIR/$GRIDPANE_WP_CONFIG_PATH"
+fi
+if [[ -n "${GRIDPANE_USER_CONFIGS_PATH:-}" ]]; then
+  SOURCE_USER_CONFIGS="$STAGE_DIR/$GRIDPANE_USER_CONFIGS_PATH"
+fi
+wp_config_report "$SOURCE_WP_CONFIG" "$TARGET_ROOT/wp-config.php" "$STAGE_DIR"
+wp_config_report_named "user-configs.php" "$SOURCE_USER_CONFIGS" "$TARGET_ROOT/user-configs.php" "$STAGE_DIR" "user-configs"
 
 if [[ "$MIGRATE_CONFIG" -eq 1 ]]; then
-  wp_config_migrate "$STAGE_DIR/$GRIDPANE_WEB_ROOT/wp-config.php" "$TARGET_ROOT/wp-config.php"
+  wp_config_migrate "$SOURCE_WP_CONFIG" "$TARGET_ROOT/wp-config.php"
+  if [[ -n "$SOURCE_USER_CONFIGS" && -f "$SOURCE_USER_CONFIGS" ]]; then
+    wp_config_migrate_named "user-configs.php" "$SOURCE_USER_CONFIGS" "$TARGET_ROOT/user-configs.php"
+  fi
 fi
 
 if [[ "$IMPORT_DB" -eq 1 ]]; then

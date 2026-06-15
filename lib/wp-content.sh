@@ -68,7 +68,7 @@ copy_web_root_files() {
   shift 2
 
   if [[ "$#" -eq 0 ]]; then
-    log "No root-level extra files detected"
+    log "No selected root-level extra files to copy"
     return 0
   fi
 

@@ -20,6 +20,10 @@ cp "$FIXTURE_DIR/target/wp-config.php" "$TARGET/wp-config.php"
 
 tar -czf "$ARCHIVE" -C "$FIXTURE_DIR/gridpane-export" .
 
+"$ROOT_DIR/bin/mb-migrator" doctor \
+  --target-root="$TARGET" \
+  --archive="$ARCHIVE"
+
 "$ROOT_DIR/bin/mb-migrator" restore "$ARCHIVE" \
   --target-root="$TARGET" \
   --stage-dir="$STAGE" \
@@ -33,6 +37,9 @@ test -f "$TARGET/vdconnect-sp4460r4.php"
 test -f "$TARGET/sitemap.xml"
 test ! -e "$TARGET/wp-content/mu-plugins/platform-loader.php"
 test -f "$STAGE/gridpane-export-combined-phpmyadmin-import.sql"
+test -f "$STAGE/sample-archived-assets/wp-config.php"
+test -f "$STAGE/sample-archived-assets/user-configs.php"
+test -f "$STAGE/wp-config.diff"
 
 perl -ne '
   $bad_tz++ if /TIME_ZONE\s*=\s*\+\d\d:\d\d/i;

@@ -3,7 +3,7 @@ set -euo pipefail
 
 REPO="${MB_MIGRATOR_REPO:-mightybox-io/mb-migrator}"
 REF="${MB_MIGRATOR_REF:-main}"
-TMP_PARENT="${TMPDIR:-/tmp}"
+TMP_PARENT="${MB_MIGRATOR_TMPDIR:-${TMPDIR:-/tmp}}"
 WORKDIR="$(mktemp -d "$TMP_PARENT/mb-migrator.XXXXXX")"
 
 cleanup() {
@@ -34,4 +34,4 @@ fi
 
 tar -xzf "$ARCHIVE" -C "$WORKDIR" --strip-components=1
 chmod +x "$WORKDIR/bin/mb-migrator"
-"$WORKDIR/bin/mb-migrator" "$@"
+bash "$WORKDIR/bin/mb-migrator" "$@"

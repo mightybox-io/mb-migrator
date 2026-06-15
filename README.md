@@ -26,6 +26,14 @@ MB_MIGRATOR_REF=main bash -c "$(curl -fsSL https://raw.githubusercontent.com/mig
 ./bin/mb-migrator --help
 ```
 
+Run a preflight check from the SSH shell before restoring:
+
+```bash
+./bin/mb-migrator doctor \
+  --target-root=/srv/htdocs \
+  --archive=/path/to/export.tar.gz
+```
+
 Dry run first:
 
 ```bash
@@ -86,10 +94,13 @@ database-*/
 htdocs/wp-content/plugins/
 htdocs/wp-content/themes/
 htdocs/wp-content/uploads/
-htdocs/wp-config.php
+site-name-archived-assets/wp-config.php
+site-name-archived-assets/user-configs.php
 ```
 
 The database directory may contain many `*-schema.sql` and table data `.sql` files, such as mydumper-style exports.
+
+Some GridPane exports may include `htdocs/wp-config.php`; when both locations exist, `htdocs/wp-config.php` is preferred. Otherwise, `*-archived-assets/wp-config.php` is used for config reporting and optional migration.
 
 ## SQL Combining Rules
 
@@ -204,15 +215,24 @@ The importer writes these files into the staging directory:
 ```text
 wp-config.diff
 wp-config-extra-from-export.txt
+user-configs.diff
+user-configs-extra-from-export.txt
 ```
 
-To replace the target config with the exported config, pass:
+For GridPane exports, config files are usually extracted from the `*-archived-assets` folder:
+
+```text
+*-archived-assets/wp-config.php
+*-archived-assets/user-configs.php
+```
+
+To replace the target config files with the exported config files, pass:
 
 ```bash
 --migrate-config
 ```
 
-The existing target config is backed up first, and the action requires confirmation unless `--yes` is also passed.
+The existing target config file is backed up first, and each replacement requires confirmation unless `--yes` is also passed.
 
 ## Database Import
 
@@ -290,6 +310,36 @@ Required for DB import and search-replace:
 Required for one-line remote use:
 
 - `curl` or `wget`
+
+## Gateway/Proxy SSH Hosts
+
+Many MightyBox SSH sessions land on a gateway/proxy host rather than directly on the webserver container. That is supported as long as the SSH shell can access the same mounted site files and run the needed tools.
+
+Before a restore, run:
+
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/mightybox-io/mb-migrator/main/remote-run.sh)" -- doctor \
+  --target-root=/srv/htdocs \
+  --archive=/path/to/export.tar.gz
+```
+
+The doctor command checks:
+
+- The archive is readable from the SSH shell.
+- The target root exists from the SSH shell.
+- `wp-content` and `wp-config.php` are visible when present.
+- The target root appears writable by the current user.
+- Required shell tools are available.
+- WP-CLI is available when DB import or search-replace will be used.
+- Disk-space information can be read when the platform exposes it.
+
+The one-line runner downloads itself into a temporary directory. If `/tmp` is not usable on a gateway host, set `MB_MIGRATOR_TMPDIR` to a writable location:
+
+```bash
+MB_MIGRATOR_TMPDIR=/srv/htdocs bash -c "$(curl -fsSL https://raw.githubusercontent.com/mightybox-io/mb-migrator/main/remote-run.sh)" -- doctor \
+  --target-root=/srv/htdocs \
+  --archive=/path/to/export.tar.gz
+```
 
 ## Smoke Test
 
