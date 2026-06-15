@@ -150,6 +150,7 @@ need_cmd perl
 need_cmd rsync
 need_cmd grep
 need_cmd sed
+need_cmd awk
 need_cmd find
 need_cmd sort
 need_cmd comm
@@ -200,8 +201,11 @@ esac
 log "Provider: $PROVIDER"
 report "Provider: $PROVIDER"
 
+log "Reading provider layout"
 gridpane_load_layout "$ARCHIVE_INDEX"
+log "Selecting optional paths"
 gridpane_select_optional_paths "$MU_PLUGINS_MODE" "$ROOT_EXTRAS_MODE"
+log "Extracting provider paths"
 gridpane_extract "$ARCHIVE" "$STAGE_DIR" "$INCLUDE_MU_PLUGINS"
 
 if [[ -z "$DB_OUTPUT" ]]; then

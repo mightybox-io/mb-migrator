@@ -19,7 +19,7 @@ gridpane_load_layout() {
   local index_file="$1"
   local root_file root_name root_files_list
 
-  GRIDPANE_DB_DIR="$(grep -E '^\./database-[^/]+/|^database-[^/]+/' "$index_file" | head -n 1 | sed -E 's#^\./##; s#/(.*)$##')"
+  GRIDPANE_DB_DIR="$(awk '{ line=$0; sub(/^\.\//, "", line); split(line, parts, "/"); if (parts[1] ~ /^database-/ && parts[2] != "") { print parts[1]; exit } }' "$index_file")"
   GRIDPANE_WEB_ROOT="htdocs"
   GRIDPANE_ROOT_EXTRA_FILES=()
   GRIDPANE_ROOT_EXTRA_CANDIDATES=()
@@ -30,7 +30,7 @@ gridpane_load_layout() {
 
   [[ -n "$GRIDPANE_DB_DIR" ]] || die "Could not find GridPane database-* directory in archive"
   grep -Eq '^\./htdocs/wp-content/|^htdocs/wp-content/' "$index_file" || die "Could not find htdocs/wp-content in archive"
-  GRIDPANE_ARCHIVED_ASSETS_DIR="$(grep -E '^\./[^/]+-archived-assets/|^[^/]+-archived-assets/' "$index_file" | head -n 1 | sed -E 's#^\./##; s#/.*$##')"
+  GRIDPANE_ARCHIVED_ASSETS_DIR="$(awk '{ line=$0; sub(/^\.\//, "", line); split(line, parts, "/"); if (parts[1] ~ /-archived-assets$/ && parts[2] != "") { print parts[1]; exit } }' "$index_file")"
 
   if grep -Eq '^\./htdocs/wp-config\.php$|^htdocs/wp-config\.php$' "$index_file"; then
     GRIDPANE_WP_CONFIG_PATH="htdocs/wp-config.php"
@@ -104,6 +104,7 @@ gridpane_select_optional_paths() {
   INCLUDE_MU_PLUGINS=0
 
   if [[ "$GRIDPANE_MU_PLUGINS_PRESENT" -eq 1 ]]; then
+    log "Exported wp-content/mu-plugins detected"
     case "$mu_plugins_mode" in
       copy)
         INCLUDE_MU_PLUGINS=1
@@ -130,6 +131,8 @@ gridpane_select_optional_paths() {
     report "Selected root extra candidates: none"
     return 0
   fi
+
+  log "Detected ${#GRIDPANE_ROOT_EXTRA_CANDIDATES[@]} non-core root file candidate(s)"
 
   case "$root_extras_mode" in
     copy)

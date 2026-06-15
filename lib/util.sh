@@ -50,7 +50,8 @@ confirm() {
     log "$prompt yes"
     return 0
   fi
-  printf '%s [y/N] ' "$prompt"
+  printf '[importer:prompt] %s\n' "$prompt" >&2
+  printf '[importer:prompt] Answer [y/N]: ' >&2
   read -r answer
   case "$answer" in
     y|Y|yes|YES) return 0 ;;
@@ -87,7 +88,7 @@ preflight_environment() {
   report "Working directory: $(pwd)"
   report "Bash version: ${BASH_VERSION:-unknown}"
 
-  for cmd in tar perl rsync grep sed find sort comm diff date head rm cp mkdir; do
+  for cmd in tar perl rsync grep sed awk find sort comm diff date head rm cp mkdir; do
     if command -v "$cmd" >/dev/null 2>&1; then
       report "Command $cmd: $(command -v "$cmd")"
     else

@@ -302,6 +302,7 @@ Required for basic restore:
 - `tar`
 - `perl`
 - `rsync`
+- `awk`
 
 Required for DB import and search-replace:
 
