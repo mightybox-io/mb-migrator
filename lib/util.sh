@@ -132,6 +132,24 @@ preflight_environment() {
     report "Target wp-config.php missing: $target_root/wp-config.php"
   fi
 
+  if [[ -e "$target_root/__wp__" ]]; then
+    report "Target uses symlinked/shared core marker: $target_root/__wp__"
+  fi
+
+  if [[ -e "$target_root/wp-load.php" ]]; then
+    report "Target wp-load.php exists: $target_root/wp-load.php"
+  else
+    report "Target wp-load.php missing: $target_root/wp-load.php"
+  fi
+
+  if [[ -d "$target_root/wp-admin" || -d "$target_root/wp-includes" ]]; then
+    report "Target has local WordPress core directories: yes"
+  elif [[ -e "$target_root/__wp__" || -e "$target_root/wp-load.php" ]]; then
+    report "Target has local WordPress core directories: no, shared/symlinked core layout detected"
+  else
+    report "Target has local WordPress core directories: no"
+  fi
+
   if [[ -w "$target_root" ]]; then
     report "Target root writable by current user: yes"
   else
@@ -162,11 +180,6 @@ preflight_environment() {
   fi
 
   if command -v wp >/dev/null 2>&1 && [[ -f "$target_root/wp-config.php" ]]; then
-    if wp --path="$target_root" core is-installed >/dev/null 2>&1; then
-      report "WP-CLI core is-installed: yes"
-    else
-      warn "WP-CLI is available, but core is-installed did not pass for $target_root"
-      report "WP-CLI core is-installed: no"
-    fi
+    report "WP-CLI site validation: skipped; database may not be imported yet"
   fi
 }

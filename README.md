@@ -315,6 +315,17 @@ Required for one-line remote use:
 
 Many MightyBox SSH sessions land on a gateway/proxy host rather than directly on the webserver container. That is supported as long as the SSH shell can access the same mounted site files and run the needed tools.
 
+MightyBox/WP Cloud sites may also use a shared/symlinked core layout where `/srv/htdocs` contains files such as:
+
+```text
+__wp__
+wp-config.php
+wp-content/
+wp-load.php
+```
+
+That is expected. The migrator targets `/srv/htdocs` for site files and does not require local `wp-admin` or `wp-includes` directories in the document root.
+
 Before a restore, run:
 
 ```bash
@@ -328,9 +339,11 @@ The doctor command checks:
 - The archive is readable from the SSH shell.
 - The target root exists from the SSH shell.
 - `wp-content` and `wp-config.php` are visible when present.
+- Shared/symlinked core markers such as `__wp__` and `wp-load.php` are visible when present.
 - The target root appears writable by the current user.
 - Required shell tools are available.
 - WP-CLI is available when DB import or search-replace will be used.
+- WP-CLI site installation checks are skipped because the database may not be imported yet.
 - Disk-space information can be read when the platform exposes it.
 
 The one-line runner downloads itself into a temporary directory. If `/tmp` is not usable on a gateway host, set `MB_MIGRATOR_TMPDIR` to a writable location:
