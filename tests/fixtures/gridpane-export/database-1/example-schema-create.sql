@@ -1,0 +1,1 @@
+CREATE DATABASE /*!32312 IF NOT EXISTS*/ `example`;

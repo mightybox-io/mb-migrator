@@ -1,0 +1,14 @@
+# Generated smoke-test artifacts
+tests/fixtures/*.tar.gz
+tests/fixtures/stage-*/
+tests/fixtures/target-smoke/
+
+# Local restore output
+restore-*/
+*.backup-??????????????
+db-backup-before-import-*.sql
+
+# OS/editor files
+.DS_Store
+.idea/
+.vscode/
