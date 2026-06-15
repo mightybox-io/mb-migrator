@@ -21,7 +21,7 @@ need_cmd() {
 need_cmd tar
 
 ARCHIVE="$WORKDIR/source.tar.gz"
-URL="https://codeload.github.com/$REPO/tar.gz/$REF"
+URL="https://api.github.com/repos/$REPO/tarball/$REF"
 
 if command -v curl >/dev/null 2>&1; then
   curl -fsSL "$URL" -o "$ARCHIVE"
