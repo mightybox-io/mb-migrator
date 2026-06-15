@@ -9,7 +9,7 @@ It is built for migration work where a single provider export archive contains s
 Run without installing the repo first:
 
 ```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/mightybox/mb-migrator/main/remote-run.sh)" -- restore /path/to/export.tar.gz --target-root=/srv/htdocs --dry-run
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/mightybox-io/mb-migrator/main/remote-run.sh)" -- restore /path/to/export.tar.gz --target-root=/srv/htdocs --dry-run
 ```
 
 The remote runner downloads the repo into a temporary directory, runs `bin/mb-migrator`, then removes the temporary directory when it exits.
@@ -17,7 +17,7 @@ The remote runner downloads the repo into a temporary directory, runs `bin/mb-mi
 Use a branch, tag, or commit by setting `MB_MIGRATOR_REF`:
 
 ```bash
-MB_MIGRATOR_REF=main bash -c "$(curl -fsSL https://raw.githubusercontent.com/mightybox/mb-migrator/main/remote-run.sh)" -- restore /path/to/export.tar.gz --target-root=/srv/htdocs --dry-run
+MB_MIGRATOR_REF=main bash -c "$(curl -fsSL https://raw.githubusercontent.com/mightybox-io/mb-migrator/main/remote-run.sh)" -- restore /path/to/export.tar.gz --target-root=/srv/htdocs --dry-run
 ```
 
 ## Local Usage
