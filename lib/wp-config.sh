@@ -22,7 +22,9 @@ wp_config_report() {
   log "Generating wp-config report"
   perl -ne 'print if /^\s*define\s*\(/ || /^\s*\$table_prefix\s*=/' "$source_config" > "$extra_file.export"
   perl -ne 'print if /^\s*define\s*\(/ || /^\s*\$table_prefix\s*=/' "$target_config" > "$extra_file.target"
-  comm -23 <(sort "$extra_file.export") <(sort "$extra_file.target") > "$extra_file" || true
+  sort "$extra_file.export" > "$extra_file.export.sorted"
+  sort "$extra_file.target" > "$extra_file.target.sorted"
+  comm -23 "$extra_file.export.sorted" "$extra_file.target.sorted" > "$extra_file" || true
   diff -u "$target_config" "$source_config" > "$diff_file" || true
 
   report "wp-config exported constants not present in target: $extra_file"

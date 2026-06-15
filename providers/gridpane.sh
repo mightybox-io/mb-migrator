@@ -14,7 +14,7 @@ gridpane_detect() {
 
 gridpane_load_layout() {
   local index_file="$1"
-  local root_file root_name
+  local root_file root_name root_files_list
 
   GRIDPANE_DB_DIR="$(grep -E '^\./database-[^/]+/|^database-[^/]+/' "$index_file" | head -n 1 | sed -E 's#^\./##; s#/(.*)$##')"
   GRIDPANE_WEB_ROOT="htdocs"
@@ -28,6 +28,9 @@ gridpane_load_layout() {
     GRIDPANE_MU_PLUGINS_PRESENT=1
   fi
 
+  root_files_list="${index_file}.root-files.$$"
+  grep -E '^\./htdocs/[^/]+$|^htdocs/[^/]+$' "$index_file" > "$root_files_list" || true
+
   while IFS= read -r root_file; do
     root_file="${root_file#./}"
     root_name="${root_file#htdocs/}"
@@ -37,7 +40,8 @@ gridpane_load_layout() {
     elif ! gridpane_is_core_root_file "$root_name"; then
       GRIDPANE_ROOT_EXTRA_CANDIDATES+=("$root_file")
     fi
-  done < <(grep -E '^\./htdocs/[^/]+$|^htdocs/[^/]+$' "$index_file" || true)
+  done < "$root_files_list"
+  rm -f "$root_files_list"
 
   report "GridPane database directory: $GRIDPANE_DB_DIR"
   report "GridPane web root: $GRIDPANE_WEB_ROOT"

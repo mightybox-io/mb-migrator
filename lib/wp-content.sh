@@ -36,7 +36,10 @@ merge_wp_content_subdir() {
 
   mkdir -p "$dest"
 
-  local item name dest_item
+  local item name dest_item item_list
+  item_list="$dest/.mb-migrator-items.$$"
+  find "$src" -mindepth 1 -maxdepth 1 -print > "$item_list"
+
   while IFS= read -r item; do
     name="$(basename "$item")"
     dest_item="$dest/$name"
@@ -53,7 +56,8 @@ merge_wp_content_subdir() {
     else
       rsync -rl --no-perms --no-owner --no-group --omit-dir-times "$item" "$dest/"
     fi
-  done < <(find "$src" -mindepth 1 -maxdepth 1 -print)
+  done < "$item_list"
+  rm -f "$item_list"
 
   report "Merged wp-content/$subdir from $src to $dest"
 }
