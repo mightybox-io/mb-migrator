@@ -19,9 +19,9 @@ if [[ -n "$COMMAND" ]]; then
 fi
 
 usage() {
-  cat <<EOF
+  cat <<'EOF' | sed "s/@@PROG@@/$PROG_NAME/g"
 Usage:
-  PROG_NAME restore ARCHIVE.tar.gz --target-root=/srv/htdocs [options]
+  @@PROG@@ restore ARCHIVE.tar.gz --target-root=/srv/htdocs [options]
 
 Options:
   --provider=auto|gridpane          Export provider adapter to use. Default: auto
@@ -43,9 +43,9 @@ Options:
   --help                            Show this help
 
 Examples:
-  PROG_NAME restore export.tar.gz --target-root=/srv/htdocs --dry-run
+  @@PROG@@ restore export.tar.gz --target-root=/srv/htdocs --dry-run
 
-  PROG_NAME restore export.tar.gz \
+  @@PROG@@ restore export.tar.gz \
     --target-root=/srv/htdocs \
     --old-url=https://old.example.com \
     --new-url=https://new.example.com \
