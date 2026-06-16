@@ -31,6 +31,9 @@ tar -czf "$ARCHIVE" -C "$FIXTURE_DIR/gridpane-export" .
   --mu-plugins=skip
 
 test -f "$TARGET/wp-content/plugins/sample-plugin/sample-plugin.php"
+test ! -e "$TARGET/wp-content/plugins/nginx-helper/nginx-helper.php"
+test ! -e "$TARGET/wp-content/plugins/redis-cache/redis-cache.php"
+test ! -e "$TARGET/wp-content/plugins/gridpane-redis-object-cache/gridpane-redis-object-cache.php"
 test -f "$TARGET/wp-content/themes/sample-theme/style.css"
 test -f "$TARGET/wp-content/uploads/2026/06/sample.txt"
 test -f "$TARGET/vdconnect-sp4460r4.php"

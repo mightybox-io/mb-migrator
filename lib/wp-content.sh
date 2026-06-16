@@ -44,6 +44,12 @@ merge_wp_content_subdir() {
     name="$(basename "$item")"
     dest_item="$dest/$name"
 
+    if [[ "$subdir" == "plugins" ]] && is_platform_plugin_excluded "$name"; then
+      log "Skipping platform-managed plugin: $name"
+      report "Skipped platform-managed plugin: $name"
+      continue
+    fi
+
     if [[ -L "$dest_item" && "${REPLACE_MANAGED_SYMLINKS:-0}" -ne 1 ]]; then
       log "Preserving destination symlink: $dest_item"
       report "Preserved destination symlink: $dest_item"
@@ -60,6 +66,18 @@ merge_wp_content_subdir() {
   rm -f "$item_list"
 
   report "Merged wp-content/$subdir from $src to $dest"
+}
+
+is_platform_plugin_excluded() {
+  local plugin_slug="$1"
+
+  case "$plugin_slug" in
+    nginx-helper|redis-cache|redis-object-cache|redis-cache-pro|gridpane-redis-object-cache|wp-redis|wp-redis-cache|object-cache-pro|*redis*object*cache*)
+      return 0
+      ;;
+  esac
+
+  return 1
 }
 
 copy_web_root_files() {

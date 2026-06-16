@@ -138,6 +138,22 @@ wp-content/uploads
 
 It does not delete destination files. Existing destination symlinks are preserved unless `--replace-managed-symlinks` is passed.
 
+The importer also skips platform-managed cache/server-helper plugins during plugin merges. These should be managed by the target platform rather than copied from the source export.
+
+Skipped plugin slugs include:
+
+```text
+nginx-helper
+redis-cache
+redis-object-cache
+redis-cache-pro
+gridpane-redis-object-cache
+wp-redis
+wp-redis-cache
+object-cache-pro
+*redis*object*cache*
+```
+
 ### Virusdie Connector Files
 
 Root-level Virusdie files are copied automatically when detected.
