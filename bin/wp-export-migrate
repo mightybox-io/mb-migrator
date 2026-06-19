@@ -38,8 +38,10 @@ Options:
   --include-mu-plugins              Alias for --mu-plugins=copy
   --root-extras=ask|copy|skip       What to do with non-core root files. Default: ask
   --replace-managed-symlinks        Replace destination symlink conflicts instead of preserving them
-  --import-db                       Import the combined SQL using wp db import
-  --skip-db-backup                  Do not run wp db export before --import-db
+  --db-import=ask|yes|no            Import combined SQL with wp db import. Default: ask, default answer yes
+  --import-db                       Alias for --db-import=yes
+  --no-import-db                    Alias for --db-import=no
+  --skip-db-backup                  Do not run wp db export before database import
   --search-replace                  Run wp search-replace after DB import or against current DB
   --migrate-config                  After confirmation, replace target wp-config.php with exported wp-config.php
   --help                            Show this help
@@ -51,7 +53,7 @@ Examples:
     --target-root=/srv/htdocs \
     --old-url=https://old.example.com \
     --new-url=https://new.example.com \
-    --import-db --search-replace
+    --db-import=yes --search-replace
 EOF
 }
 
@@ -111,6 +113,7 @@ MU_PLUGINS_MODE="ask"
 ROOT_EXTRAS_MODE="ask"
 REPLACE_MANAGED_SYMLINKS=0
 IMPORT_DB=0
+DB_IMPORT_MODE="ask"
 SKIP_DB_BACKUP=0
 SEARCH_REPLACE=0
 MIGRATE_CONFIG=0
@@ -129,7 +132,9 @@ while [[ $# -gt 0 ]]; do
     --include-mu-plugins) MU_PLUGINS_MODE="copy" ;;
     --root-extras=*) ROOT_EXTRAS_MODE="${1#*=}" ;;
     --replace-managed-symlinks) REPLACE_MANAGED_SYMLINKS=1 ;;
-    --import-db) IMPORT_DB=1 ;;
+    --db-import=*) DB_IMPORT_MODE="${1#*=}" ;;
+    --import-db) DB_IMPORT_MODE="yes" ;;
+    --no-import-db|--skip-db-import) DB_IMPORT_MODE="no" ;;
     --skip-db-backup) SKIP_DB_BACKUP=1 ;;
     --search-replace) SEARCH_REPLACE=1 ;;
     --migrate-config) MIGRATE_CONFIG=1 ;;
@@ -144,6 +149,10 @@ done
 [[ -d "$TARGET_ROOT" ]] || die "Target root does not exist: $TARGET_ROOT"
 case "$MU_PLUGINS_MODE" in ask|copy|skip) ;; *) die "--mu-plugins must be ask, copy, or skip" ;; esac
 case "$ROOT_EXTRAS_MODE" in ask|copy|skip) ;; *) die "--root-extras must be ask, copy, or skip" ;; esac
+case "$DB_IMPORT_MODE" in ask|yes|no) ;; *) die "--db-import must be ask, yes, or no" ;; esac
+if [[ "$DB_IMPORT_MODE" == "yes" ]]; then
+  IMPORT_DB=1
+fi
 
 need_cmd tar
 need_cmd perl
@@ -238,9 +247,7 @@ if [[ "$MIGRATE_CONFIG" -eq 1 ]]; then
   fi
 fi
 
-if [[ "$IMPORT_DB" -eq 1 ]]; then
-  wpcli_import_db "$TARGET_ROOT" "$DB_OUTPUT" "$SKIP_DB_BACKUP"
-fi
+wpcli_maybe_import_db "$TARGET_ROOT" "$DB_OUTPUT" "$SKIP_DB_BACKUP" "$DB_IMPORT_MODE"
 
 if [[ "$SEARCH_REPLACE" -eq 1 ]]; then
   [[ -n "$OLD_URL" && -n "$NEW_URL" ]] || die "--search-replace requires --old-url and --new-url"

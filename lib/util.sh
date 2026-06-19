@@ -59,6 +59,21 @@ confirm() {
   esac
 }
 
+confirm_default_yes() {
+  local prompt="$1"
+  if [[ "${ASSUME_YES:-0}" -eq 1 ]]; then
+    log "$prompt yes"
+    return 0
+  fi
+  printf '[importer:prompt] %s\n' "$prompt" >&2
+  printf '[importer:prompt] Answer [Y/n]: ' >&2
+  read -r answer
+  case "$answer" in
+    n|N|no|NO) return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
 run_or_dry() {
   if [[ "${DRY_RUN:-0}" -eq 1 ]]; then
     printf '[dry-run]'

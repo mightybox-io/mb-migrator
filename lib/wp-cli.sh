@@ -13,8 +13,6 @@ wpcli_import_db() {
     return 0
   fi
 
-  confirm "Import combined SQL into the database configured by $target_root/wp-config.php?" || die "DB import cancelled"
-
   if [[ "$skip_backup" -ne 1 ]]; then
     local backup="$target_root/db-backup-before-import-$(date +%Y%m%d%H%M%S).sql"
     log "Backing up current database to $backup"
@@ -25,6 +23,38 @@ wpcli_import_db() {
   log "Importing database"
   wp --path="$target_root" db import "$sql_file"
   report "Imported database from $sql_file"
+}
+
+wpcli_maybe_import_db() {
+  local target_root="$1"
+  local sql_file="$2"
+  local skip_backup="$3"
+  local import_mode="$4"
+
+  case "$import_mode" in
+    yes)
+      wpcli_import_db "$target_root" "$sql_file" "$skip_backup"
+      ;;
+    no)
+      log "Skipping database import"
+      report "Database import: skipped"
+      ;;
+    ask)
+      if [[ "${DRY_RUN:-0}" -eq 1 ]]; then
+        log "Would ask whether to import the combined SQL into the target database; default answer is yes"
+        log "Would import database: wp --path=$target_root db import $sql_file"
+        report "Database import: ask deferred by dry-run, default yes"
+      elif confirm_default_yes "Import combined SQL into the database configured by $target_root/wp-config.php?"; then
+        wpcli_import_db "$target_root" "$sql_file" "$skip_backup"
+      else
+        log "Skipping database import"
+        report "Database import: skipped by user"
+      fi
+      ;;
+    *)
+      die "Invalid database import mode: $import_mode"
+      ;;
+  esac
 }
 
 wpcli_search_replace() {

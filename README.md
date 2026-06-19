@@ -49,14 +49,14 @@ Restore files and build the combined SQL file:
   --target-root=/srv/htdocs
 ```
 
-Restore, import the DB, and run serialized-safe search-replace:
+Restore, automatically import the DB, and run serialized-safe search-replace:
 
 ```bash
 ./bin/mb-migrator restore /path/to/export.tar.gz \
   --target-root=/srv/htdocs \
   --old-url=https://old.example.com \
   --new-url=https://new.example.com \
-  --import-db \
+  --db-import=yes \
   --search-replace
 ```
 
@@ -252,11 +252,28 @@ The existing target config file is backed up first, and each replacement require
 
 ## Database Import
 
-Import the generated SQL into the database configured by the target `wp-config.php`:
+By default, the importer asks whether to import the generated SQL into the database configured by the target `wp-config.php`. The default answer is yes:
 
 ```bash
---import-db
+--db-import=ask
 ```
+
+For unattended imports:
+
+```bash
+--db-import=yes
+```
+
+To build the combined SQL but skip import:
+
+```bash
+--db-import=no
+```
+
+Compatibility aliases:
+
+- `--import-db` means `--db-import=yes`.
+- `--no-import-db` means `--db-import=no`.
 
 Before import, the current DB is exported with:
 
@@ -303,8 +320,10 @@ In `--dry-run` mode, WP-CLI search-replace is also run with `--dry-run`.
 --include-mu-plugins              Alias for --mu-plugins=copy
 --root-extras=ask|copy|skip       What to do with non-core root files. Default: ask
 --replace-managed-symlinks        Replace destination symlink conflicts instead of preserving them
---import-db                       Import the combined SQL using wp db import
---skip-db-backup                  Do not run wp db export before --import-db
+--db-import=ask|yes|no            Import combined SQL with wp db import. Default: ask, default answer yes
+--import-db                       Alias for --db-import=yes
+--no-import-db                    Alias for --db-import=no
+--skip-db-backup                  Do not run wp db export before database import
 --search-replace                  Run wp search-replace after DB import or against current DB
 --migrate-config                  After confirmation, replace target wp-config.php with exported wp-config.php
 --help                            Show help
