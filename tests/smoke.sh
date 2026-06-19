@@ -29,7 +29,8 @@ tar -czf "$ARCHIVE" -C "$FIXTURE_DIR/gridpane-export" .
   --stage-dir="$STAGE" \
   --root-extras=copy \
   --mu-plugins=skip \
-  --db-import=no
+  --db-import=no \
+  --cleanup=no
 
 test -f "$TARGET/wp-content/plugins/sample-plugin/sample-plugin.php"
 test ! -e "$TARGET/wp-content/plugins/nginx-helper/nginx-helper.php"

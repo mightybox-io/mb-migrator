@@ -287,22 +287,37 @@ Skip that backup only when you already have a current DB backup:
 --skip-db-backup
 ```
 
-To remove the combined SQL file after a successful database import:
+By default, the importer asks whether to clean up migration artifacts after a successful run:
 
 ```bash
---delete-sql-after-import
+--cleanup=ask
 ```
 
-This only runs after `wp db import` succeeds. It does not delete the source export archive or the full staging directory.
+The cleanup prompt explicitly lists the paths that will be deleted, typically:
 
-Additional cleanup options:
+- The source export archive.
+- The staging directory, including extracted files and generated artifacts.
+- The combined SQL file when it lives outside the staging directory.
+
+A copy of the migration report is preserved in the target root before deleting the staging directory.
+
+For unattended cleanup:
 
 ```bash
---delete-stage-after-success
---delete-archive-after-success
+--cleanup=yes
 ```
 
-`--delete-stage-after-success` preserves a copy of the migration report in the target root before removing the staging directory.
+To leave all migration artifacts in place:
+
+```bash
+--cleanup=no
+```
+
+Legacy cleanup flags are still accepted as aliases for `--cleanup=yes`:
+
+- `--delete-sql-after-import`
+- `--delete-stage-after-success`
+- `--delete-archive-after-success`
 
 ## Search-Replace
 
@@ -341,9 +356,10 @@ In `--dry-run` mode, WP-CLI search-replace is also run with `--dry-run`.
 --import-db                       Alias for --db-import=yes
 --no-import-db                    Alias for --db-import=no
 --skip-db-backup                  Do not run wp db export before database import
---delete-sql-after-import         Delete combined SQL only after successful wp db import
---delete-stage-after-success      Delete staging directory after a successful run
---delete-archive-after-success    Delete source export archive after a successful run
+--cleanup=ask|yes|no              Delete migration artifacts after success. Default: ask
+--delete-sql-after-import         Legacy alias for --cleanup=yes
+--delete-stage-after-success      Legacy alias for --cleanup=yes
+--delete-archive-after-success    Legacy alias for --cleanup=yes
 --search-replace                  Run wp search-replace after DB import or against current DB
 --migrate-config                  After confirmation, replace target wp-config.php with exported wp-config.php
 --help                            Show help

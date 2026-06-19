@@ -42,9 +42,10 @@ Options:
   --import-db                       Alias for --db-import=yes
   --no-import-db                    Alias for --db-import=no
   --skip-db-backup                  Do not run wp db export before database import
-  --delete-sql-after-import         Delete combined SQL only after successful wp db import
-  --delete-stage-after-success      Delete staging directory after a successful run
-  --delete-archive-after-success    Delete source export archive after a successful run
+  --cleanup=ask|yes|no              Delete migration artifacts after success. Default: ask
+  --delete-sql-after-import         Legacy alias for --cleanup=yes
+  --delete-stage-after-success      Legacy alias for --cleanup=yes
+  --delete-archive-after-success    Legacy alias for --cleanup=yes
   --search-replace                  Run wp search-replace after DB import or against current DB
   --migrate-config                  After confirmation, replace target wp-config.php with exported wp-config.php
   --help                            Show this help
@@ -120,9 +121,7 @@ DB_IMPORT_MODE="ask"
 SKIP_DB_BACKUP=0
 SEARCH_REPLACE=0
 MIGRATE_CONFIG=0
-DELETE_SQL_AFTER_IMPORT=0
-DELETE_STAGE_AFTER_SUCCESS=0
-DELETE_ARCHIVE_AFTER_SUCCESS=0
+CLEANUP_MODE="ask"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -142,9 +141,8 @@ while [[ $# -gt 0 ]]; do
     --import-db) DB_IMPORT_MODE="yes" ;;
     --no-import-db|--skip-db-import) DB_IMPORT_MODE="no" ;;
     --skip-db-backup) SKIP_DB_BACKUP=1 ;;
-    --delete-sql-after-import) DELETE_SQL_AFTER_IMPORT=1 ;;
-    --delete-stage-after-success) DELETE_STAGE_AFTER_SUCCESS=1 ;;
-    --delete-archive-after-success) DELETE_ARCHIVE_AFTER_SUCCESS=1 ;;
+    --cleanup=*) CLEANUP_MODE="${1#*=}" ;;
+    --delete-sql-after-import|--delete-stage-after-success|--delete-archive-after-success) CLEANUP_MODE="yes" ;;
     --search-replace) SEARCH_REPLACE=1 ;;
     --migrate-config) MIGRATE_CONFIG=1 ;;
     --help|-h) usage; exit 0 ;;
@@ -159,6 +157,7 @@ done
 case "$MU_PLUGINS_MODE" in ask|copy|skip) ;; *) die "--mu-plugins must be ask, copy, or skip" ;; esac
 case "$ROOT_EXTRAS_MODE" in ask|copy|skip) ;; *) die "--root-extras must be ask, copy, or skip" ;; esac
 case "$DB_IMPORT_MODE" in ask|yes|no) ;; *) die "--db-import must be ask, yes, or no" ;; esac
+case "$CLEANUP_MODE" in ask|yes|no) ;; *) die "--cleanup must be ask, yes, or no" ;; esac
 if [[ "$DB_IMPORT_MODE" != "no" && "$DRY_RUN" -ne 1 ]]; then
   IMPORT_DB=1
 fi
@@ -256,41 +255,101 @@ if [[ "$MIGRATE_CONFIG" -eq 1 ]]; then
   fi
 fi
 
-wpcli_maybe_import_db "$TARGET_ROOT" "$DB_OUTPUT" "$SKIP_DB_BACKUP" "$DB_IMPORT_MODE" "$DELETE_SQL_AFTER_IMPORT"
+wpcli_maybe_import_db "$TARGET_ROOT" "$DB_OUTPUT" "$SKIP_DB_BACKUP" "$DB_IMPORT_MODE" 0
 
 if [[ "$SEARCH_REPLACE" -eq 1 ]]; then
   [[ -n "$OLD_URL" && -n "$NEW_URL" ]] || die "--search-replace requires --old-url and --new-url"
   wpcli_search_replace "$TARGET_ROOT" "$OLD_URL" "$NEW_URL"
 fi
 
-if [[ "$DELETE_ARCHIVE_AFTER_SUCCESS" -eq 1 ]]; then
-  if [[ "$DRY_RUN" -eq 1 ]]; then
-    log "Would delete source export archive after successful run: $ARCHIVE"
-  else
-    log "Deleting source export archive: $ARCHIVE"
-    rm -f "$ARCHIVE"
-    report "Deleted source export archive: $ARCHIVE"
-  fi
-fi
-
 FINAL_REPORT_FILE="$REPORT_FILE"
-if [[ "$DELETE_STAGE_AFTER_SUCCESS" -eq 1 ]]; then
-  if [[ "$DRY_RUN" -eq 1 ]]; then
-    log "Would delete staging directory after successful run: $STAGE_DIR"
-  else
+CLEANUP_RAN=0
+CLEANUP_HAS_ITEMS=0
+
+cleanup_show_plan() {
+  log "Cleanup would delete these migration artifacts:"
+  if [[ -e "$ARCHIVE" ]]; then
+    log "- Source export archive: $ARCHIVE"
+    CLEANUP_HAS_ITEMS=1
+  fi
+  if [[ -d "$STAGE_DIR" ]]; then
+    log "- Staging directory, including extracted files and generated artifacts: $STAGE_DIR"
+    CLEANUP_HAS_ITEMS=1
+  fi
+  case "$DB_OUTPUT" in
+    "$STAGE_DIR"/*) ;;
+    *)
+      if [[ -e "$DB_OUTPUT" ]]; then
+        log "- Combined SQL file: $DB_OUTPUT"
+        CLEANUP_HAS_ITEMS=1
+      fi
+      ;;
+  esac
+  if [[ -f "$REPORT_FILE" && -d "$STAGE_DIR" ]]; then
+    log "A copy of the migration report will be preserved in: $TARGET_ROOT"
+  fi
+}
+
+cleanup_run() {
+  if [[ -f "$REPORT_FILE" && -d "$STAGE_DIR" ]]; then
     FINAL_REPORT_FILE="$TARGET_ROOT/mb-migrator-report-$(date +%Y%m%d%H%M%S).txt"
     cp "$REPORT_FILE" "$FINAL_REPORT_FILE"
     log "Preserved migration report: $FINAL_REPORT_FILE"
+  fi
+
+  case "$DB_OUTPUT" in
+    "$STAGE_DIR"/*) ;;
+    *)
+      if [[ -e "$DB_OUTPUT" ]]; then
+        log "Deleting combined SQL file: $DB_OUTPUT"
+        rm -f "$DB_OUTPUT"
+        report "Deleted combined SQL file: $DB_OUTPUT"
+      fi
+      ;;
+  esac
+
+  if [[ -d "$STAGE_DIR" ]]; then
     log "Deleting staging directory: $STAGE_DIR"
     rm -rf "$STAGE_DIR"
   fi
+
+  if [[ -e "$ARCHIVE" ]]; then
+    log "Deleting source export archive: $ARCHIVE"
+    rm -f "$ARCHIVE"
+  fi
+
+  CLEANUP_RAN=1
+}
+
+if [[ "$CLEANUP_MODE" != "no" ]]; then
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    cleanup_show_plan
+    if [[ "$CLEANUP_HAS_ITEMS" -eq 1 ]]; then
+      log "Would ask whether to delete these cleanup items after a successful run"
+    else
+      log "No migration cleanup items found"
+    fi
+  else
+    cleanup_show_plan
+    if [[ "$CLEANUP_HAS_ITEMS" -eq 1 ]]; then
+      if [[ "$CLEANUP_MODE" == "yes" ]] || confirm "Delete the migration artifacts listed above?"; then
+        cleanup_run
+      else
+        log "Skipping cleanup; migration artifacts were left in place"
+        report "Cleanup skipped by user"
+      fi
+    else
+      log "No migration cleanup items found"
+    fi
+  fi
+else
+  log "Cleanup disabled; migration artifacts were left in place"
+  report "Cleanup disabled"
 fi
 
 log "Done"
-if [[ "$DELETE_STAGE_AFTER_SUCCESS" -eq 1 && "$DRY_RUN" -ne 1 ]]; then
+if [[ "$CLEANUP_RAN" -eq 1 ]]; then
   log "Staging directory deleted: $STAGE_DIR"
-elif [[ "$DELETE_SQL_AFTER_IMPORT" -eq 1 && "${DB_IMPORT_RAN:-0}" -eq 1 ]]; then
-  log "Combined SQL deleted after successful import: $DB_OUTPUT"
 else
   log "Combined SQL: $DB_OUTPUT"
 fi
