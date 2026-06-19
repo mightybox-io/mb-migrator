@@ -42,6 +42,9 @@ Options:
   --import-db                       Alias for --db-import=yes
   --no-import-db                    Alias for --db-import=no
   --skip-db-backup                  Do not run wp db export before database import
+  --delete-sql-after-import         Delete combined SQL only after successful wp db import
+  --delete-stage-after-success      Delete staging directory after a successful run
+  --delete-archive-after-success    Delete source export archive after a successful run
   --search-replace                  Run wp search-replace after DB import or against current DB
   --migrate-config                  After confirmation, replace target wp-config.php with exported wp-config.php
   --help                            Show this help
@@ -117,6 +120,9 @@ DB_IMPORT_MODE="ask"
 SKIP_DB_BACKUP=0
 SEARCH_REPLACE=0
 MIGRATE_CONFIG=0
+DELETE_SQL_AFTER_IMPORT=0
+DELETE_STAGE_AFTER_SUCCESS=0
+DELETE_ARCHIVE_AFTER_SUCCESS=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -136,6 +142,9 @@ while [[ $# -gt 0 ]]; do
     --import-db) DB_IMPORT_MODE="yes" ;;
     --no-import-db|--skip-db-import) DB_IMPORT_MODE="no" ;;
     --skip-db-backup) SKIP_DB_BACKUP=1 ;;
+    --delete-sql-after-import) DELETE_SQL_AFTER_IMPORT=1 ;;
+    --delete-stage-after-success) DELETE_STAGE_AFTER_SUCCESS=1 ;;
+    --delete-archive-after-success) DELETE_ARCHIVE_AFTER_SUCCESS=1 ;;
     --search-replace) SEARCH_REPLACE=1 ;;
     --migrate-config) MIGRATE_CONFIG=1 ;;
     --help|-h) usage; exit 0 ;;
@@ -150,7 +159,7 @@ done
 case "$MU_PLUGINS_MODE" in ask|copy|skip) ;; *) die "--mu-plugins must be ask, copy, or skip" ;; esac
 case "$ROOT_EXTRAS_MODE" in ask|copy|skip) ;; *) die "--root-extras must be ask, copy, or skip" ;; esac
 case "$DB_IMPORT_MODE" in ask|yes|no) ;; *) die "--db-import must be ask, yes, or no" ;; esac
-if [[ "$DB_IMPORT_MODE" == "yes" ]]; then
+if [[ "$DB_IMPORT_MODE" != "no" && "$DRY_RUN" -ne 1 ]]; then
   IMPORT_DB=1
 fi
 
@@ -247,13 +256,42 @@ if [[ "$MIGRATE_CONFIG" -eq 1 ]]; then
   fi
 fi
 
-wpcli_maybe_import_db "$TARGET_ROOT" "$DB_OUTPUT" "$SKIP_DB_BACKUP" "$DB_IMPORT_MODE"
+wpcli_maybe_import_db "$TARGET_ROOT" "$DB_OUTPUT" "$SKIP_DB_BACKUP" "$DB_IMPORT_MODE" "$DELETE_SQL_AFTER_IMPORT"
 
 if [[ "$SEARCH_REPLACE" -eq 1 ]]; then
   [[ -n "$OLD_URL" && -n "$NEW_URL" ]] || die "--search-replace requires --old-url and --new-url"
   wpcli_search_replace "$TARGET_ROOT" "$OLD_URL" "$NEW_URL"
 fi
 
+if [[ "$DELETE_ARCHIVE_AFTER_SUCCESS" -eq 1 ]]; then
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    log "Would delete source export archive after successful run: $ARCHIVE"
+  else
+    log "Deleting source export archive: $ARCHIVE"
+    rm -f "$ARCHIVE"
+    report "Deleted source export archive: $ARCHIVE"
+  fi
+fi
+
+FINAL_REPORT_FILE="$REPORT_FILE"
+if [[ "$DELETE_STAGE_AFTER_SUCCESS" -eq 1 ]]; then
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    log "Would delete staging directory after successful run: $STAGE_DIR"
+  else
+    FINAL_REPORT_FILE="$TARGET_ROOT/mb-migrator-report-$(date +%Y%m%d%H%M%S).txt"
+    cp "$REPORT_FILE" "$FINAL_REPORT_FILE"
+    log "Preserved migration report: $FINAL_REPORT_FILE"
+    log "Deleting staging directory: $STAGE_DIR"
+    rm -rf "$STAGE_DIR"
+  fi
+fi
+
 log "Done"
-log "Combined SQL: $DB_OUTPUT"
-log "Report: $REPORT_FILE"
+if [[ "$DELETE_STAGE_AFTER_SUCCESS" -eq 1 && "$DRY_RUN" -ne 1 ]]; then
+  log "Staging directory deleted: $STAGE_DIR"
+elif [[ "$DELETE_SQL_AFTER_IMPORT" -eq 1 && "${DB_IMPORT_RAN:-0}" -eq 1 ]]; then
+  log "Combined SQL deleted after successful import: $DB_OUTPUT"
+else
+  log "Combined SQL: $DB_OUTPUT"
+fi
+log "Report: $FINAL_REPORT_FILE"

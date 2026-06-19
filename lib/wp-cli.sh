@@ -4,6 +4,7 @@ wpcli_import_db() {
   local target_root="$1"
   local sql_file="$2"
   local skip_backup="$3"
+  local delete_sql_after_import="$4"
 
   need_cmd wp
   [[ -f "$sql_file" ]] || die "SQL file not found: $sql_file"
@@ -23,6 +24,13 @@ wpcli_import_db() {
   log "Importing database"
   wp --path="$target_root" db import "$sql_file"
   report "Imported database from $sql_file"
+  DB_IMPORT_RAN=1
+
+  if [[ "$delete_sql_after_import" -eq 1 ]]; then
+    log "Deleting combined SQL after successful import: $sql_file"
+    rm -f "$sql_file"
+    report "Deleted combined SQL after successful import: $sql_file"
+  fi
 }
 
 wpcli_maybe_import_db() {
@@ -30,10 +38,11 @@ wpcli_maybe_import_db() {
   local sql_file="$2"
   local skip_backup="$3"
   local import_mode="$4"
+  local delete_sql_after_import="$5"
 
   case "$import_mode" in
     yes)
-      wpcli_import_db "$target_root" "$sql_file" "$skip_backup"
+      wpcli_import_db "$target_root" "$sql_file" "$skip_backup" "$delete_sql_after_import"
       ;;
     no)
       log "Skipping database import"
@@ -43,9 +52,12 @@ wpcli_maybe_import_db() {
       if [[ "${DRY_RUN:-0}" -eq 1 ]]; then
         log "Would ask whether to import the combined SQL into the target database; default answer is yes"
         log "Would import database: wp --path=$target_root db import $sql_file"
+        if [[ "$delete_sql_after_import" -eq 1 ]]; then
+          log "Would delete combined SQL after successful import: $sql_file"
+        fi
         report "Database import: ask deferred by dry-run, default yes"
       elif confirm_default_yes "Import combined SQL into the database configured by $target_root/wp-config.php?"; then
-        wpcli_import_db "$target_root" "$sql_file" "$skip_backup"
+        wpcli_import_db "$target_root" "$sql_file" "$skip_backup" "$delete_sql_after_import"
       else
         log "Skipping database import"
         report "Database import: skipped by user"

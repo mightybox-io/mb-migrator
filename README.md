@@ -287,6 +287,23 @@ Skip that backup only when you already have a current DB backup:
 --skip-db-backup
 ```
 
+To remove the combined SQL file after a successful database import:
+
+```bash
+--delete-sql-after-import
+```
+
+This only runs after `wp db import` succeeds. It does not delete the source export archive or the full staging directory.
+
+Additional cleanup options:
+
+```bash
+--delete-stage-after-success
+--delete-archive-after-success
+```
+
+`--delete-stage-after-success` preserves a copy of the migration report in the target root before removing the staging directory.
+
 ## Search-Replace
 
 Run serialized-safe URL replacement after import:
@@ -324,6 +341,9 @@ In `--dry-run` mode, WP-CLI search-replace is also run with `--dry-run`.
 --import-db                       Alias for --db-import=yes
 --no-import-db                    Alias for --db-import=no
 --skip-db-backup                  Do not run wp db export before database import
+--delete-sql-after-import         Delete combined SQL only after successful wp db import
+--delete-stage-after-success      Delete staging directory after a successful run
+--delete-archive-after-success    Delete source export archive after a successful run
 --search-replace                  Run wp search-replace after DB import or against current DB
 --migrate-config                  After confirmation, replace target wp-config.php with exported wp-config.php
 --help                            Show help
