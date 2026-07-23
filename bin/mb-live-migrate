@@ -20,7 +20,7 @@ Live migration options:
   --identity-file=PATH                  Existing SSH private key
   --source-db-method=auto|wp-cli|native Default: auto
   --target-db-method=auto|wp-cli|native Default: auto
-  --db-import=ask|yes|no                  Default: ask
+  --db-import=ask|yes|no                Default: ask
   --continue-existing                   Continue a detected migration as catch-up
   --restart                             Delete matching state and start again
   --state-dir=PATH                      Persistent private migration state

@@ -5,6 +5,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export MB_MIGRATOR_PROG_NAME="mb-migrator"
 
 case "${1:-}" in
+  --help|-h|'')
+    "$SCRIPT_DIR/mb-live-migrate" --help
+    printf '\nArchive restore options:\n\n'
+    exec "$SCRIPT_DIR/wp-export-migrate" --help
+    ;;
   pair|pull)
     exec "$SCRIPT_DIR/mb-live-migrate" "$@"
     ;;
