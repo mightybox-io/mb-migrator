@@ -18,10 +18,6 @@ printf '%s\n' 'verification' > "$SOURCE/verification.html"
 printf '%s\n' '<?php core' > "$SOURCE/wp-load.php"
 printf '%s\n' \
   '<?php' \
-  "define('DB_NAME', 'source_db');" \
-  "define('DB_USER', 'source_user');" \
-  "define('DB_PASSWORD', getenv('PACKAGE_DB_PASSWORD'));" \
-  "define('DB_HOST', 'localhost');" \
   "\$table_prefix = 'wp_';" > "$SOURCE/wp-config.php"
 printf '%s\n' '<?php' "define('DB_NAME', 'target_db');" "\$table_prefix = 'wp_';" > "$TARGET/wp-config.php"
 
@@ -35,7 +31,10 @@ printf '%s\n' '#!/usr/bin/env bash' \
   'printf '\''https://source.example.test\n'\''' > "$FAKE_BIN/mariadb"
 chmod +x "$FAKE_BIN/mariadb-dump" "$FAKE_BIN/mariadb"
 
-export PACKAGE_DB_PASSWORD="package-secret"
+export DB_NAME="source_db"
+export DB_USER="source_user"
+export DB_PASSWORD="package-secret"
+export DB_HOST="localhost"
 PATH="$FAKE_BIN:$PATH" "$ROOT_DIR/bin/mb-migrator" export-site \
   --source-root="$SOURCE" \
   --output="$PACKAGE" \

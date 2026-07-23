@@ -150,7 +150,7 @@ preflight_environment() {
     report "Search-replace: pending because WP-CLI is unavailable"
   fi
 
-  [[ "$missing" -eq 0 ]] || die "Preflight failed because required commands are missing"
+  [[ "$missing" -eq 0 ]] || die "Preflight failed because required tools or database settings are unavailable"
 
   if [[ ! -d "$target_root" ]]; then
     die "Target root does not exist from this shell: $target_root"

@@ -23,6 +23,9 @@ wp_config_value() {
     if ($kind === "constant" && preg_match($envPattern, $text, $m)) {
       $v = getenv($m[2]); if ($v !== false) { echo $v; exit(0); }
     }
+    if ($kind === "constant") {
+      $v = getenv($argv[2]); if ($v !== false) { echo $v; exit(0); }
+    }
     exit(1);
   ' "$target_root/wp-config.php" "$key" "$type"
 }

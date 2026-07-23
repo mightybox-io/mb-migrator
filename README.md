@@ -179,7 +179,7 @@ Source export and target backup/import support:
 --target-db-method=auto|wp-cli|native
 ```
 
-`auto` tries WP-CLI first and falls back to `mariadb-dump`/`mysqldump` or `mariadb`/`mysql`. Native mode reads `DB_NAME`, `DB_USER`, `DB_PASSWORD`, and `DB_HOST` from `wp-config.php` without bootstrapping WordPress. Quoted literals and simple `getenv('NAME')` values are supported, including host ports and Unix sockets. Unsupported dynamic expressions fail preflight with the unresolved setting named.
+`auto` tries WP-CLI first and falls back to `mariadb-dump`/`mysqldump` or `mariadb`/`mysql`. Native mode resolves `DB_NAME`, `DB_USER`, `DB_PASSWORD`, and `DB_HOST` without bootstrapping WordPress. It supports quoted literals and simple `getenv('NAME')` expressions in `wp-config.php`, plus exact-name environment variables such as those injected by a hosting platform. Host ports and Unix sockets are supported. Unsupported dynamic expressions fail preflight with the unresolved setting named.
 
 Credentials are written only to temporary mode-`0600` client files and are never placed in process arguments, reports, snapshots, or saved migration state. The live snapshot also excludes `wp-config.php`.
 
