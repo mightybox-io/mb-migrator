@@ -7,8 +7,13 @@ export MB_MIGRATOR_PROG_NAME="mb-migrator"
 case "${1:-}" in
   --help|-h|'')
     "$SCRIPT_DIR/mb-live-migrate" --help
+    printf '\n'
+    "$SCRIPT_DIR/mb-package" --help
     printf '\nArchive restore options:\n\n'
     exec "$SCRIPT_DIR/wp-export-migrate" --help
+    ;;
+  export-site|import-site)
+    exec "$SCRIPT_DIR/mb-package" "$@"
     ;;
   pair|pull)
     exec "$SCRIPT_DIR/mb-live-migrate" "$@"

@@ -6,7 +6,7 @@ source_root="${2:-}"
 db_method="${3:-auto}"
 
 fail() {
-  printf '[legacy-source:error] %s\n' "$*" >&2
+  printf '[source-collector:error] %s\n' "$*" >&2
   exit 1
 }
 
@@ -123,7 +123,7 @@ export_database() (
       return 0
     fi
     [[ "$db_method" == "auto" ]] || fail "WP-CLI database export failed"
-    printf '[legacy-source:warn] WP-CLI export failed; using native dump\n' >&2
+    printf '[source-collector:warn] WP-CLI export failed; using native dump\n' >&2
   fi
   [[ "$db_method" != "wp-cli" ]] || fail "WP-CLI is unavailable"
   native_dump

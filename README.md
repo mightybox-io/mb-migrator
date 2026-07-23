@@ -6,6 +6,74 @@ It is built for migration work where a single provider export archive contains s
 
 It can also pull a single-site WordPress installation directly from a legacy MightyBox host over SSH. The live workflow is controlled entirely from the new host; the legacy host does not need a copy of this repository.
 
+## Portable WordPress Packages
+
+The portable package workflow works with any source and destination hosts where you can run shell commands. The hosts do not need direct network connectivity:
+
+1. Run `export-site` on the old host.
+2. Transfer the package and its checksum manually.
+3. Run `import-site` on the new host.
+
+The commands can be run without cloning this repository.
+
+On the old host, create the package:
+
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/mightybox-io/mb-migrator/main/remote-run.sh)" -- \
+  export-site \
+  --source-root=/path/to/wordpress \
+  --output="$HOME/wordpress-package.tar.gz"
+```
+
+Database export defaults to `auto`, which tries WP-CLI first and then native `mariadb-dump`/`mysqldump` using credentials resolved from `wp-config.php`. Force a method when troubleshooting:
+
+```bash
+--db-method=wp-cli
+--db-method=native
+```
+
+The export produces:
+
+```text
+wordpress-package.tar.gz
+wordpress-package.tar.gz.sha256
+```
+
+Transfer both files using `scp`, SFTP, your laptop, or any other approved method. For example, from a workstation that can reach both hosts:
+
+```bash
+scp -P 3022 user@old-host:~/wordpress-package.tar.gz* .
+scp wordpress-package.tar.gz* user@new-host:~/
+```
+
+On the new host, verify and import the package:
+
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/mightybox-io/mb-migrator/main/remote-run.sh)" -- \
+  import-site "$HOME/wordpress-package.tar.gz" \
+  --target-root=/srv/htdocs \
+  --new-url=https://new.example.com
+```
+
+`import-site` verifies the checksum when the sidecar is present, reads the old URL from the package manifest when it was detectable, and then uses the normal guarded restore pipeline. If export could not detect the source URL, pass `--old-url` together with `--new-url`. Import prompts for database import, `mu-plugins`, root extras, and cleanup unless explicit policies are supplied.
+
+For an unattended import:
+
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/mightybox-io/mb-migrator/main/remote-run.sh)" -- \
+  import-site "$HOME/wordpress-package.tar.gz" \
+  --target-root=/srv/htdocs \
+  --new-url=https://new.example.com \
+  --target-db-method=auto \
+  --mu-plugins=skip \
+  --root-extras=copy \
+  --db-import=yes \
+  --cleanup=no \
+  --yes
+```
+
+Portable packages contain the database, `wp-content`, non-core root-file candidates, and source URL metadata. They exclude WordPress core and `wp-config.php`. Package files use mode `0600`, and temporary work directories use mode `0700`. The source host needs temporary free space for an extracted copy of the selected site files plus the final compressed package.
+
 ## Live Legacy MightyBox Migration
 
 Legacy sites are expected at `/var/www/webroot/ROOT` by default. Run the migrator from the new host as the user that can write the destination WordPress root.
@@ -457,7 +525,7 @@ In `--dry-run` mode, WP-CLI search-replace is also run with `--dry-run`.
 ## Options
 
 ```text
---provider=auto|gridpane|legacy-mightybox
+--provider=auto|gridpane|legacy-mightybox|wordpress-package
                                   Export provider adapter to use. Default: auto
 --target-root=PATH                WordPress document root to restore into
 --stage-dir=PATH                  Staging directory. Default: target-root/restore-<archive>-<timestamp>
@@ -563,9 +631,10 @@ Run the included smoke test:
 ./tests/smoke.sh
 ./tests/live-smoke.sh
 ./tests/native-db-smoke.sh
+./tests/package-smoke.sh
 ```
 
-The tests cover GridPane restore compatibility, live legacy pull and catch-up behavior, snapshot security, SQL normalization, and native target database backup/import.
+The tests cover GridPane restore compatibility, live legacy pull and catch-up behavior, portable package export/import, snapshot security, SQL normalization, and native target database backup/import.
 
 Keep generated smoke artifacts for debugging:
 
@@ -581,6 +650,7 @@ Current adapters:
 
 - `gridpane.sh`
 - `legacy-mightybox.sh`
+- `wordpress-package.sh`
 
 Future adapters should follow the same shape:
 

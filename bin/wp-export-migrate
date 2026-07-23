@@ -14,6 +14,7 @@ source "$ROOT_DIR/lib/wp-config.sh"
 source "$ROOT_DIR/lib/wp-cli.sh"
 source "$ROOT_DIR/providers/gridpane.sh"
 source "$ROOT_DIR/providers/legacy-mightybox.sh"
+source "$ROOT_DIR/providers/wordpress-package.sh"
 
 COMMAND="${1:-}"
 if [[ -n "$COMMAND" ]]; then
@@ -27,7 +28,7 @@ Usage:
   @@PROG@@ doctor --target-root=/srv/htdocs [--archive=ARCHIVE.tar.gz]
 
 Options:
-  --provider=auto|gridpane|legacy-mightybox
+  --provider=auto|gridpane|legacy-mightybox|wordpress-package
                                       Export provider adapter. Default: auto
   --target-root=PATH                WordPress document root to restore into
   --archive=PATH                    Archive path for doctor preflight checks
@@ -119,6 +120,7 @@ PROVIDER_WEB_ROOT=""
 PROVIDER_ROOT_EXTRA_FILES=()
 PROVIDER_WP_CONFIG_PATH=""
 PROVIDER_USER_CONFIGS_PATH=""
+PROVIDER_MANIFEST_PATH=""
 TARGET_ROOT=""
 STAGE_DIR=""
 DB_OUTPUT=""
@@ -220,7 +222,10 @@ archive_index "$ARCHIVE" "$STAGE_DIR"
 
 case "$PROVIDER" in
   auto)
-    if legacy_mightybox_detect "$ARCHIVE_INDEX"; then
+    if wordpress_package_detect "$ARCHIVE_INDEX"; then
+      PROVIDER="wordpress-package"
+      PROVIDER_ADAPTER="wordpress_package"
+    elif legacy_mightybox_detect "$ARCHIVE_INDEX"; then
       PROVIDER="legacy-mightybox"
       PROVIDER_ADAPTER="legacy_mightybox"
     elif gridpane_detect "$ARCHIVE_INDEX"; then
@@ -238,6 +243,10 @@ case "$PROVIDER" in
     legacy_mightybox_detect "$ARCHIVE_INDEX" || die "Archive does not look like a legacy MightyBox snapshot"
     PROVIDER_ADAPTER="legacy_mightybox"
     ;;
+  wordpress-package)
+    wordpress_package_detect "$ARCHIVE_INDEX" || die "Archive does not look like a portable WordPress package"
+    PROVIDER_ADAPTER="wordpress_package"
+    ;;
   *) die "Unsupported provider: $PROVIDER" ;;
 esac
 
@@ -251,6 +260,21 @@ log "Selecting optional paths"
 log "Extracting provider paths"
 "${PROVIDER_ADAPTER}_extract" "$ARCHIVE" "$STAGE_DIR" "$INCLUDE_MU_PLUGINS"
 "${PROVIDER_ADAPTER}_publish_layout"
+
+if [[ -n "$PROVIDER_MANIFEST_PATH" && -f "$STAGE_DIR/$PROVIDER_MANIFEST_PATH" ]]; then
+  PACKAGE_SOURCE_URL="$(awk -F= '/^source_url=/{sub(/^[^=]*=/, ""); print; exit}' "$STAGE_DIR/$PROVIDER_MANIFEST_PATH")"
+  if [[ -z "$OLD_URL" && -n "$PACKAGE_SOURCE_URL" ]]; then
+    OLD_URL="$PACKAGE_SOURCE_URL"
+    report "Source URL read from package manifest: $OLD_URL"
+    log "Source URL from package: $OLD_URL"
+  fi
+  if [[ -n "$OLD_URL" && -n "$NEW_URL" ]]; then
+    SEARCH_REPLACE=1
+  fi
+fi
+if [[ "$PROVIDER" == "wordpress-package" && -n "$NEW_URL" && -z "$OLD_URL" ]]; then
+  die "Package does not contain a detectable source URL; pass --old-url with --new-url"
+fi
 
 if [[ -z "$DB_OUTPUT" ]]; then
   archive_base="$(basename "$ARCHIVE")"

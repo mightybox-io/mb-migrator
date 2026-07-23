@@ -1,0 +1,145 @@
+#!/usr/bin/env bash
+set -euo pipefail
+umask 077
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+source "$ROOT_DIR/lib/util.sh"
+
+usage() {
+  cat <<'EOF'
+Portable WordPress package commands:
+
+  mb-migrator export-site --source-root=PATH [--output=PACKAGE.tar.gz]
+  mb-migrator import-site PACKAGE.tar.gz --target-root=PATH [restore options]
+
+Export options:
+  --source-root=PATH              WordPress document root to package
+  --output=PATH                   Default: ./wordpress-package-<timestamp>.tar.gz
+  --db-method=auto|wp-cli|native  Default: auto
+
+The package contains the database, wp-content, selected root-file candidates,
+and source URL metadata. It never contains wp-config.php.
+EOF
+}
+
+hash_file() {
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" | awk '{print $1}'
+  else die "Required command not found: sha256sum or shasum"; fi
+}
+
+export_site() (
+  local source_root="" output="" db_method="auto"
+  local work output_tmp checksum_tmp source_url package_stage
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --source-root=*) source_root="${1#*=}" ;;
+      --output=*) output="${1#*=}" ;;
+      --db-method=*) db_method="${1#*=}" ;;
+      --help|-h) usage; exit 0 ;;
+      *) die "Unknown export-site option: $1" ;;
+    esac
+    shift
+  done
+
+  [[ -n "$source_root" ]] || die "export-site requires --source-root"
+  source_root="$(abs_path "$source_root")"
+  [[ -d "$source_root" ]] || die "Source root does not exist: $source_root"
+  case "$db_method" in auto|wp-cli|native) ;; *) die "--db-method must be auto, wp-cli, or native" ;; esac
+  [[ "$source_root" != *$'\n'* && "$source_root" != *$'\r'* ]] || die "Source root cannot contain newlines"
+
+  if [[ -z "$output" ]]; then
+    output="$(pwd)/wordpress-package-$(date +%Y%m%d%H%M%S).tar.gz"
+  else
+    output="$(abs_path_for_create "$output")"
+  fi
+  [[ -d "$(dirname "$output")" ]] || die "Output directory does not exist: $(dirname "$output")"
+  [[ ! -e "$output" && ! -e "$output.sha256" ]] || die "Output already exists: $output"
+
+  need_cmd bash
+  need_cmd tar
+  work="$(mktemp -d "${TMPDIR:-/tmp}/mb-wordpress-package.XXXXXX")"
+  output_tmp="$output.tmp.$$"
+  checksum_tmp="$output.sha256.tmp.$$"
+  cleanup_export_site() {
+    rm -rf "$work"
+    rm -f "$output_tmp" "$checksum_tmp"
+  }
+  trap cleanup_export_site EXIT
+
+  package_stage="$work/package"
+  mkdir -p "$package_stage/htdocs" "$package_stage/database-package"
+  chmod 700 "$work" "$package_stage" "$package_stage/htdocs" "$package_stage/database-package"
+
+  log "Preflighting WordPress source"
+  bash "$ROOT_DIR/lib/remote-source.sh" preflight "$source_root" "$db_method"
+
+  log "Collecting WordPress files"
+  bash "$ROOT_DIR/lib/remote-source.sh" archive-files "$source_root" "$db_method" > "$work/files.tar.gz"
+  tar -tzf "$work/files.tar.gz" >/dev/null
+  tar -xzf "$work/files.tar.gz" -C "$package_stage/htdocs"
+
+  log "Exporting WordPress database"
+  bash "$ROOT_DIR/lib/remote-source.sh" export-db "$source_root" "$db_method" > "$package_stage/database-package/site.sql"
+  [[ -s "$package_stage/database-package/site.sql" ]] || die "Database export was empty"
+
+  source_url="$(bash "$ROOT_DIR/lib/remote-source.sh" get-url "$source_root" "$db_method" 2>/dev/null || true)"
+  [[ "$source_url" != *$'\n'* && "$source_url" != *$'\r'* ]] || die "Detected source URL contains newlines"
+  {
+    printf 'format=mb-wordpress-package-v1\n'
+    printf 'source_root=%s\n' "$source_root"
+    [[ -z "$source_url" ]] || printf 'source_url=%s\n' "$source_url"
+    printf 'created_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  } > "$package_stage/mb-wordpress-package-manifest"
+
+  chmod 600 "$package_stage/database-package/site.sql" "$package_stage/mb-wordpress-package-manifest"
+  log "Building portable package"
+  tar -czf "$output_tmp" -C "$package_stage" mb-wordpress-package-manifest database-package htdocs
+  tar -tzf "$output_tmp" >/dev/null
+  hash_file "$output_tmp" > "$checksum_tmp"
+  chmod 600 "$output_tmp" "$checksum_tmp"
+  mv "$output_tmp" "$output"
+  mv "$checksum_tmp" "$output.sha256"
+
+  log "Package created: $output"
+  log "Checksum: $output.sha256"
+  if [[ -n "$source_url" ]]; then
+    log "Source URL: $source_url"
+  else
+    warn "Source URL could not be detected; pass --old-url when importing with --new-url"
+  fi
+)
+
+import_site() {
+  local package="${1:-}" expected actual
+  if [[ "$package" == "--help" || "$package" == "-h" ]]; then
+    usage
+    return 0
+  fi
+  [[ -n "$package" && "$package" != --* ]] || die "import-site requires a package path"
+  shift
+  package="$(abs_path "$package")"
+  [[ -f "$package" ]] || die "Package not found: $package"
+
+  if [[ -f "$package.sha256" ]]; then
+    expected="$(awk 'NR==1{print $1}' "$package.sha256")"
+    actual="$(hash_file "$package")"
+    [[ -n "$expected" && "$expected" == "$actual" ]] || die "Package checksum verification failed"
+    log "Package checksum verified"
+  else
+    warn "No checksum sidecar found; continuing with archive validation"
+  fi
+
+  exec "$ROOT_DIR/bin/wp-export-migrate" restore "$package" "$@" --provider=wordpress-package
+}
+
+command_name="${1:-}"
+[[ -z "$command_name" ]] || shift
+case "$command_name" in
+  export-site) export_site "$@" ;;
+  import-site) import_site "$@" ;;
+  --help|-h|'') usage ;;
+  *) die "Unknown package command: $command_name" ;;
+esac
