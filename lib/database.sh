@@ -51,7 +51,7 @@ sub append_file {
       $stats{removed_use}++;
       next;
     }
-    if ($line =~ /^\s*(?:\/\*!\d+\s*)?SET\s+FOREIGN_KEY_CHECKS\s*=/i) {
+    if ($line =~ /^\s*(?:\/\*!\d+\s*)?SET\b.*\bFOREIGN_KEY_CHECKS\s*=/i) {
       $stats{removed_source_fk}++;
       next;
     }

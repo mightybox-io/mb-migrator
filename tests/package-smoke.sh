@@ -25,7 +25,7 @@ printf '%s\n' '#!/usr/bin/env bash' \
   'set -euo pipefail' \
   'cnf="${1#--defaults-extra-file=}"' \
   'grep -q '\''password="package-secret"'\'' "$cnf"' \
-  'printf '\''DROP TABLE IF EXISTS `wp_options`;\nCREATE TABLE `wp_options` (`option_id` bigint);\nINSERT INTO `wp_options` VALUES (1);\n'\''' > "$FAKE_BIN/mariadb-dump"
+  'printf '\''/*!40014 SET @OLD_FOREIGN_KEY_CHECKS=@@FOREIGN_KEY_CHECKS, FOREIGN_KEY_CHECKS=0 */;\nDROP TABLE IF EXISTS `wp_options`;\nCREATE TABLE `wp_options` (`option_id` bigint);\nINSERT INTO `wp_options` VALUES (1);\n/*!40014 SET FOREIGN_KEY_CHECKS=@OLD_FOREIGN_KEY_CHECKS */;\n'\''' > "$FAKE_BIN/mariadb-dump"
 printf '%s\n' '#!/usr/bin/env bash' \
   'set -euo pipefail' \
   'printf '\''https://source.example.test\n'\''' > "$FAKE_BIN/mariadb"
