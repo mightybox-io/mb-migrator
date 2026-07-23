@@ -29,7 +29,9 @@ archive_extract_existing_paths() {
   local paths=()
   local path
   for path in "$@"; do
-    if archive_has_path_prefix "$path"; then
+    if grep -Eq "^${path}(/|$)" "$ARCHIVE_INDEX"; then
+      paths+=("$path")
+    elif grep -Eq "^\./${path}(/|$)" "$ARCHIVE_INDEX"; then
       paths+=("./$path")
     else
       log "Archive path not present, skipping: $path"

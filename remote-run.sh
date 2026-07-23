@@ -33,5 +33,5 @@ else
 fi
 
 tar -xzf "$ARCHIVE" -C "$WORKDIR" --strip-components=1
-chmod +x "$WORKDIR/bin/mb-migrator"
+chmod +x "$WORKDIR/bin/mb-migrator" "$WORKDIR/bin/mb-live-migrate" "$WORKDIR/bin/wp-export-migrate"
 bash "$WORKDIR/bin/mb-migrator" "$@"

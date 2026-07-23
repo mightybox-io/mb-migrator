@@ -1,0 +1,297 @@
+#!/usr/bin/env bash
+set -euo pipefail
+umask 077
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+source "$ROOT_DIR/lib/util.sh"
+
+usage() {
+  cat <<'EOF'
+Usage:
+  mb-migrator pair USER@HOST [--port=22] [--identity-file=PATH]
+  mb-migrator pull USER@HOST --target-root=PATH [options]
+  mb-migrator doctor --source=USER@HOST --target-root=PATH [options]
+
+Live migration options:
+  --source-root=PATH                    Default: /var/www/webroot/ROOT
+  --target-root=PATH                    Destination WordPress document root
+  --port=PORT                           SSH port. Default: 22
+  --identity-file=PATH                  Existing SSH private key
+  --source-db-method=auto|wp-cli|native Default: auto
+  --target-db-method=auto|wp-cli|native Default: auto
+  --db-import=ask|yes|no                  Default: ask
+  --continue-existing                   Continue a detected migration as catch-up
+  --restart                             Delete matching state and start again
+  --state-dir=PATH                      Persistent private migration state
+  --snapshot=keep|delete                Default: keep
+
+All unrecognized pull options are forwarded to the restore command.
+EOF
+}
+
+default_state_dir() {
+  if [[ -n "${XDG_STATE_HOME:-}" ]]; then printf '%s/mb-migrator\n' "$XDG_STATE_HOME"
+  else printf '%s/.local/state/mb-migrator\n' "$HOME"; fi
+}
+
+hash_text() {
+  if command -v sha256sum >/dev/null 2>&1; then printf '%s' "$1" | sha256sum | awk '{print $1}'
+  else printf '%s' "$1" | shasum -a 256 | awk '{print $1}'; fi
+}
+
+hash_file() {
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print $1}'
+  else shasum -a 256 "$1" | awk '{print $1}'; fi
+}
+
+validate_source() {
+  [[ "$1" =~ ^[A-Za-z0-9._-]+@[A-Za-z0-9._-]+$ || "$1" =~ ^[A-Za-z0-9._-]+$ ]] || die "Invalid SSH destination: $1"
+}
+
+validate_remote_path() {
+  [[ "$1" =~ ^/[A-Za-z0-9._/-]+$ ]] || die "Source path contains unsupported characters: $1"
+}
+
+make_ssh_args() {
+  SSH_ARGS=(-p "$SSH_PORT")
+  [[ -z "$IDENTITY_FILE" ]] || SSH_ARGS+=(-i "$IDENTITY_FILE")
+}
+
+ssh_remote() {
+  local remote_command="$1" source_root="$2" method="${3:-auto}"
+  ssh "${SSH_ARGS[@]}" "$SSH_SOURCE" bash -s -- "$remote_command" "$source_root" "$method" < "$ROOT_DIR/lib/remote-source.sh"
+}
+
+pair_command() {
+  SSH_SOURCE="${1:-}"; shift || true
+  [[ -n "$SSH_SOURCE" ]] || die "pair requires USER@HOST"
+  validate_source "$SSH_SOURCE"
+  SSH_PORT=22; IDENTITY_FILE=""; STATE_DIR="$(default_state_dir)"
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --port=*) SSH_PORT="${1#*=}" ;;
+      --identity-file=*) IDENTITY_FILE="${1#*=}" ;;
+      --state-dir=*) STATE_DIR="${1#*=}" ;;
+      --help|-h) usage; exit 0 ;;
+      *) die "Unknown pair option: $1" ;;
+    esac
+    shift
+  done
+  [[ "$SSH_PORT" =~ ^[0-9]+$ ]] || die "Invalid SSH port: $SSH_PORT"
+  mkdir -p "$STATE_DIR/keys"; chmod 700 "$STATE_DIR" "$STATE_DIR/keys"
+  if [[ -z "$IDENTITY_FILE" ]]; then
+    IDENTITY_FILE="$STATE_DIR/keys/$(hash_text "$SSH_SOURCE:$SSH_PORT" | cut -c1-20)"
+    if [[ ! -f "$IDENTITY_FILE" ]]; then
+      need_cmd ssh-keygen
+      ssh-keygen -q -t ed25519 -N '' -C "mb-migrator $SSH_SOURCE" -f "$IDENTITY_FILE"
+      chmod 600 "$IDENTITY_FILE"; chmod 644 "$IDENTITY_FILE.pub"
+      log "Generated dedicated SSH key: $IDENTITY_FILE"
+    fi
+  fi
+  [[ -f "$IDENTITY_FILE" ]] || die "SSH private key not found: $IDENTITY_FILE"
+  if [[ ! -f "$IDENTITY_FILE.pub" ]]; then
+    need_cmd ssh-keygen
+    ssh-keygen -y -f "$IDENTITY_FILE" > "$IDENTITY_FILE.pub"
+    chmod 644 "$IDENTITY_FILE.pub"
+  fi
+  make_ssh_args
+  if ssh "${SSH_ARGS[@]}" -o BatchMode=yes "$SSH_SOURCE" true >/dev/null 2>&1; then
+    log "SSH pairing verified"
+    return 0
+  fi
+  if command -v ssh-copy-id >/dev/null 2>&1 && ssh-copy-id -i "$IDENTITY_FILE.pub" -p "$SSH_PORT" "$SSH_SOURCE"; then
+    ssh "${SSH_ARGS[@]}" -o BatchMode=yes "$SSH_SOURCE" true >/dev/null 2>&1 || die "Key was installed but SSH verification failed"
+    log "SSH pairing verified"
+    return 0
+  fi
+  log "Install this public key from an authorized session on the legacy host:"
+  printf "mkdir -p ~/.ssh && chmod 700 ~/.ssh && printf '%%s\\\\n' %q >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys\n" "$(<"$IDENTITY_FILE.pub")"
+  die "Automatic key installation was unavailable; install the printed key and rerun pair"
+}
+
+doctor_command() {
+  SSH_SOURCE=""; SOURCE_ROOT="/var/www/webroot/ROOT"; TARGET_ROOT=""; SSH_PORT=22
+  IDENTITY_FILE=""; SOURCE_DB_METHOD="auto"; TARGET_DB_METHOD="auto"; STATE_DIR="$(default_state_dir)"
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --source=*) SSH_SOURCE="${1#*=}" ;;
+      --source-root=*) SOURCE_ROOT="${1#*=}" ;;
+      --target-root=*) TARGET_ROOT="${1#*=}" ;;
+      --port=*) SSH_PORT="${1#*=}" ;;
+      --identity-file=*) IDENTITY_FILE="${1#*=}" ;;
+      --source-db-method=*) SOURCE_DB_METHOD="${1#*=}" ;;
+      --target-db-method=*) TARGET_DB_METHOD="${1#*=}" ;;
+      --state-dir=*) STATE_DIR="${1#*=}" ;;
+      --help|-h) usage; exit 0 ;;
+      *) die "Unknown live doctor option: $1" ;;
+    esac
+    shift
+  done
+  [[ -n "$SSH_SOURCE" ]] || die "live doctor requires --source"
+  [[ -n "$TARGET_ROOT" && -d "$TARGET_ROOT" ]] || die "live doctor requires an existing --target-root"
+  validate_source "$SSH_SOURCE"; validate_remote_path "$SOURCE_ROOT"
+  if [[ -z "$IDENTITY_FILE" ]]; then IDENTITY_FILE="$STATE_DIR/keys/$(hash_text "$SSH_SOURCE:$SSH_PORT" | cut -c1-20)"; fi
+  [[ -f "$IDENTITY_FILE" ]] || die "SSH key not found. Run: mb-migrator pair $SSH_SOURCE --port=$SSH_PORT"
+  make_ssh_args
+  ssh "${SSH_ARGS[@]}" -o BatchMode=yes "$SSH_SOURCE" true >/dev/null || die "SSH connection failed"
+  ssh_remote preflight "$SOURCE_ROOT" "$SOURCE_DB_METHOD"
+  "$ROOT_DIR/bin/wp-export-migrate" doctor --target-root="$TARGET_ROOT" --import-db --target-db-method="$TARGET_DB_METHOD"
+  log "Live migration doctor completed"
+}
+
+pull_command() {
+  SSH_SOURCE="${1:-}"; shift || true
+  [[ -n "$SSH_SOURCE" ]] || die "pull requires USER@HOST"
+  validate_source "$SSH_SOURCE"
+  SOURCE_ROOT="/var/www/webroot/ROOT"; TARGET_ROOT=""; SSH_PORT=22; IDENTITY_FILE=""
+  SOURCE_DB_METHOD="auto"; TARGET_DB_METHOD="auto"; DB_IMPORT_MODE="ask"
+  STATE_DIR="$(default_state_dir)"; SNAPSHOT_MODE="keep"
+  CONTINUE_EXISTING=0; RESTART=0; OLD_URL=""; NEW_URL=""; SEARCH_REPLACE=0
+  RESTORE_ARGS=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --source-root=*) SOURCE_ROOT="${1#*=}" ;;
+      --target-root=*) TARGET_ROOT="${1#*=}" ;;
+      --port=*) SSH_PORT="${1#*=}" ;;
+      --identity-file=*) IDENTITY_FILE="${1#*=}" ;;
+      --source-db-method=*) SOURCE_DB_METHOD="${1#*=}" ;;
+      --target-db-method=*) TARGET_DB_METHOD="${1#*=}"; RESTORE_ARGS+=("$1") ;;
+      --db-import=*) DB_IMPORT_MODE="${1#*=}"; RESTORE_ARGS+=("$1") ;;
+      --no-import-db|--skip-db-import) DB_IMPORT_MODE="no"; RESTORE_ARGS+=("$1") ;;
+      --import-db) DB_IMPORT_MODE="yes"; RESTORE_ARGS+=("$1") ;;
+      --state-dir=*) STATE_DIR="${1#*=}" ;;
+      --snapshot=*) SNAPSHOT_MODE="${1#*=}" ;;
+      --continue-existing) CONTINUE_EXISTING=1 ;;
+      --restart) RESTART=1 ;;
+      --old-url=*) OLD_URL="${1#*=}"; RESTORE_ARGS+=("$1") ;;
+      --new-url=*) NEW_URL="${1#*=}"; RESTORE_ARGS+=("$1"); SEARCH_REPLACE=1 ;;
+      --search-replace) SEARCH_REPLACE=1; RESTORE_ARGS+=("$1") ;;
+      --migrate-config) die "Live snapshots exclude wp-config.php; --migrate-config is not supported by pull" ;;
+      --provider=*) die "The pull command selects the legacy-mightybox provider automatically" ;;
+      --dry-run) die "Use live doctor for a non-mutating preflight" ;;
+      --help|-h) usage; exit 0 ;;
+      *) RESTORE_ARGS+=("$1") ;;
+    esac
+    shift
+  done
+  [[ -n "$TARGET_ROOT" && -d "$TARGET_ROOT" ]] || die "pull requires an existing --target-root"
+  validate_remote_path "$SOURCE_ROOT"
+  [[ "$SSH_PORT" =~ ^[0-9]+$ ]] || die "Invalid SSH port: $SSH_PORT"
+  case "$SOURCE_DB_METHOD" in auto|wp-cli|native) ;; *) die "Invalid source DB method" ;; esac
+  case "$TARGET_DB_METHOD" in auto|wp-cli|native) ;; *) die "Invalid target DB method" ;; esac
+  case "$DB_IMPORT_MODE" in ask|yes|no) ;; *) die "Invalid database import mode" ;; esac
+  case "$SNAPSHOT_MODE" in keep|delete) ;; *) die "--snapshot must be keep or delete" ;; esac
+  [[ "$CONTINUE_EXISTING" -eq 0 || "$RESTART" -eq 0 ]] || die "Choose only one of --continue-existing or --restart"
+
+  mkdir -p "$STATE_DIR/migrations" "$STATE_DIR/keys"; chmod 700 "$STATE_DIR" "$STATE_DIR/migrations" "$STATE_DIR/keys"
+  migration_id="$(hash_text "$SSH_SOURCE|$SSH_PORT|$SOURCE_ROOT|$(abs_path "$TARGET_ROOT")" | cut -c1-20)"
+  migration_dir="$STATE_DIR/migrations/$migration_id"
+  if [[ -z "$IDENTITY_FILE" ]]; then IDENTITY_FILE="$STATE_DIR/keys/$(hash_text "$SSH_SOURCE:$SSH_PORT" | cut -c1-20)"; fi
+  [[ -f "$IDENTITY_FILE" ]] || die "SSH key not found. Run: mb-migrator pair $SSH_SOURCE --port=$SSH_PORT"
+  make_ssh_args
+
+  if [[ "$DB_IMPORT_MODE" != "no" ]]; then
+    log "Preflighting target database access"
+    "$ROOT_DIR/bin/wp-export-migrate" doctor --target-root="$TARGET_ROOT" --import-db --target-db-method="$TARGET_DB_METHOD"
+  fi
+  log "Preflighting legacy source over SSH"
+  ssh_remote preflight "$SOURCE_ROOT" "$SOURCE_DB_METHOD"
+
+  if [[ -d "$migration_dir" && "$CONTINUE_EXISTING" -eq 0 && "$RESTART" -eq 0 ]]; then
+    if [[ ! -t 0 ]]; then die "Existing migration detected; use --continue-existing or --restart"; fi
+    printf '[importer:prompt] Existing migration %s found at %s. [C]ontinue catch-up, [r]estart, or [q]uit? ' "$migration_id" "$migration_dir" >&2
+    read -r choice
+    case "$choice" in r|R|restart) RESTART=1 ;; q|Q|quit) die "Migration cancelled" ;; *) CONTINUE_EXISTING=1 ;; esac
+  fi
+  if [[ "$RESTART" -eq 1 && -d "$migration_dir" ]]; then
+    log "Deleting migration-specific state: $migration_dir"
+    rm -rf "$migration_dir"
+  fi
+  mkdir -p "$migration_dir/work/htdocs" "$migration_dir/snapshots"; chmod 700 "$migration_dir" "$migration_dir/work" "$migration_dir/snapshots"
+
+  if [[ "$CONTINUE_EXISTING" -eq 1 ]]; then
+    if [[ -z "$OLD_URL" && -f "$migration_dir/old-url" ]]; then
+      OLD_URL="$(<"$migration_dir/old-url")"
+      RESTORE_ARGS+=("--old-url=$OLD_URL")
+    fi
+    if [[ -z "$NEW_URL" && -f "$migration_dir/new-url" ]]; then
+      NEW_URL="$(<"$migration_dir/new-url")"
+      RESTORE_ARGS+=("--new-url=$NEW_URL")
+      SEARCH_REPLACE=1
+    fi
+  fi
+
+  if [[ "$SEARCH_REPLACE" -eq 1 && -z "$OLD_URL" ]]; then
+    OLD_URL="$(ssh_remote get-url "$SOURCE_ROOT" "$SOURCE_DB_METHOD" 2>/dev/null || true)"
+    if [[ -n "$OLD_URL" ]]; then
+      log "Detected source URL: $OLD_URL"
+      RESTORE_ARGS+=("--old-url=$OLD_URL" "--search-replace")
+    fi
+  elif [[ "$SEARCH_REPLACE" -eq 1 ]]; then
+    RESTORE_ARGS+=("--search-replace")
+  fi
+  run_tmp="$(mktemp -d "$migration_dir/run.XXXXXX")"
+  trap 'rm -rf "$run_tmp"' EXIT
+  mkdir -p "$run_tmp/htdocs" "$run_tmp/database-legacy"
+
+  if command -v rsync >/dev/null 2>&1 && ssh "${SSH_ARGS[@]}" "$SSH_SOURCE" command -v rsync >/dev/null 2>&1; then
+    log "Transferring new and changed wp-content files with rsync"
+    mkdir -p "$migration_dir/work/htdocs/wp-content"
+    printf -v quoted_identity '%q' "$IDENTITY_FILE"
+    ssh_transport="ssh -p $SSH_PORT -i $quoted_identity"
+    rsync -az --no-perms --no-owner --no-group -e "$ssh_transport" "$SSH_SOURCE:$SOURCE_ROOT/wp-content/" "$migration_dir/work/htdocs/wp-content/"
+    ssh_remote archive-root "$SOURCE_ROOT" "$SOURCE_DB_METHOD" > "$run_tmp/root.tar.gz"
+    tar -xzf "$run_tmp/root.tar.gz" -C "$migration_dir/work/htdocs"
+  else
+    warn "rsync unavailable on one host; retransferring a complete file snapshot"
+    ssh_remote archive-files "$SOURCE_ROOT" "$SOURCE_DB_METHOD" > "$run_tmp/files.tar.gz"
+    tar -xzf "$run_tmp/files.tar.gz" -C "$migration_dir/work/htdocs"
+  fi
+
+  log "Exporting a fresh source database"
+  ssh_remote export-db "$SOURCE_ROOT" "$SOURCE_DB_METHOD" > "$run_tmp/database-legacy/site.sql"
+  [[ -s "$run_tmp/database-legacy/site.sql" ]] || die "Source database export was empty"
+  cp -R "$migration_dir/work/htdocs/." "$run_tmp/htdocs/"
+  printf 'format=legacy-mightybox-v1\nsource=%s\nsource_root=%s\ntarget_root=%s\ncreated_utc=%s\n' \
+    "$SSH_SOURCE" "$SOURCE_ROOT" "$(abs_path "$TARGET_ROOT")" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$run_tmp/mb-migrator-manifest"
+  chmod 600 "$run_tmp/database-legacy/site.sql" "$run_tmp/mb-migrator-manifest"
+  snapshot="$migration_dir/snapshots/legacy-$(date +%Y%m%d%H%M%S)-$$.tar.gz"
+  tar -czf "$snapshot.tmp" -C "$run_tmp" mb-migrator-manifest database-legacy htdocs
+  tar -tzf "$snapshot.tmp" >/dev/null
+  mv "$snapshot.tmp" "$snapshot"; chmod 600 "$snapshot"
+  hash_file "$snapshot" > "$snapshot.sha256"; chmod 600 "$snapshot.sha256"
+  printf '%s\n' "$snapshot" > "$migration_dir/latest-snapshot"
+  printf '%s\n' "$SSH_SOURCE" > "$migration_dir/source"
+  printf '%s\n' "$SOURCE_ROOT" > "$migration_dir/source-root"
+  printf '%s\n' "$(abs_path "$TARGET_ROOT")" > "$migration_dir/target-root"
+  find "$migration_dir" -maxdepth 1 -type f -exec chmod 600 {} \;
+  log "Snapshot ready: $snapshot"
+
+  if [[ "$SEARCH_REPLACE" -eq 1 && -z "$OLD_URL" ]]; then
+    warn "Old URL was not supplied; URL replacement will require --old-url"
+    SEARCH_REPLACE=0
+    filtered=(); for arg in "${RESTORE_ARGS[@]}"; do [[ "$arg" == --search-replace ]] || filtered+=("$arg"); done; RESTORE_ARGS=("${filtered[@]}")
+  fi
+  cp "$snapshot" "$run_tmp/restore-snapshot.tar.gz"
+  chmod 600 "$run_tmp/restore-snapshot.tar.gz"
+  live_stage="$TARGET_ROOT/restore-live-${migration_id}-$(date +%Y%m%d%H%M%S)-$$"
+  "$ROOT_DIR/bin/wp-export-migrate" restore "$run_tmp/restore-snapshot.tar.gz" --provider=legacy-mightybox --target-root="$TARGET_ROOT" --stage-dir="$live_stage" "${RESTORE_ARGS[@]}"
+  [[ -z "$OLD_URL" ]] || { printf '%s\n' "$OLD_URL" > "$migration_dir/old-url"; chmod 600 "$migration_dir/old-url"; }
+  [[ -z "$NEW_URL" ]] || { printf '%s\n' "$NEW_URL" > "$migration_dir/new-url"; chmod 600 "$migration_dir/new-url"; }
+  if [[ "$SNAPSHOT_MODE" == "delete" ]]; then
+    rm -f "$snapshot" "$snapshot.sha256" "$migration_dir/latest-snapshot"
+    log "Deleted snapshot after successful restore: $snapshot"
+  fi
+  log "Migration ID: $migration_id"
+  log "Catch up by rerunning this pull command with --continue-existing"
+}
+
+command_name="${1:-}"; shift || true
+case "$command_name" in
+  pair) pair_command "$@" ;;
+  pull) pull_command "$@" ;;
+  doctor) doctor_command "$@" ;;
+  --help|-h|'') usage ;;
+  *) die "Unknown live migration command: $command_name" ;;
+esac

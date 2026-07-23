@@ -89,8 +89,10 @@ preflight_environment() {
   local archive="${2:-}"
   local import_db="${3:-0}"
   local search_replace="${4:-0}"
+  local target_db_method="${5:-auto}"
   local missing=0
   local cmd
+  local wp_usable=0
 
   log "Running environment preflight"
   report "Environment preflight:"
@@ -113,18 +115,39 @@ preflight_environment() {
     fi
   done
 
-  if [[ "$import_db" -eq 1 || "$search_replace" -eq 1 ]]; then
-    if command -v wp >/dev/null 2>&1; then
+  if [[ "$import_db" -eq 1 ]]; then
+    if command -v wp >/dev/null 2>&1 && wp --path="$target_root" --skip-plugins --skip-themes config get DB_NAME --type=constant --quiet >/dev/null 2>&1; then
+      wp_usable=1
+    fi
+    if [[ "$target_db_method" != "native" && "$wp_usable" -eq 1 ]]; then
       report "Command wp: $(command -v wp)"
+    elif [[ "$target_db_method" != "wp-cli" ]] && \
+         { command -v mariadb-dump >/dev/null 2>&1 || command -v mysqldump >/dev/null 2>&1; } && \
+         { command -v mariadb >/dev/null 2>&1 || command -v mysql >/dev/null 2>&1; } && command -v php >/dev/null 2>&1; then
+      warn "Using native database tools for target backup/import"
+      report "Native target database tools: available"
+      local setting
+      for setting in DB_NAME DB_USER DB_PASSWORD DB_HOST; do
+        if ! wp_config_value "$target_root" "$setting" >/dev/null 2>&1; then
+          warn "Could not resolve $setting from target wp-config.php"
+          report "Target database setting $setting: unresolved"
+          missing=1
+        fi
+      done
     else
-      warn "WP-CLI is required for --import-db or --search-replace but was not found"
-      report "Command wp: missing"
+      warn "Neither WP-CLI nor a complete native database toolchain is available"
+      report "Database tools: missing"
       missing=1
     fi
   elif command -v wp >/dev/null 2>&1; then
     report "Command wp: $(command -v wp)"
   else
     report "Command wp: missing, OK unless --import-db or --search-replace is used"
+  fi
+
+  if [[ "$search_replace" -eq 1 ]] && ! command -v wp >/dev/null 2>&1; then
+    warn "WP-CLI is unavailable; requested URL rewrite will be reported as pending"
+    report "Search-replace: pending because WP-CLI is unavailable"
   fi
 
   [[ "$missing" -eq 0 ]] || die "Preflight failed because required commands are missing"

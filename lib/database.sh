@@ -31,6 +31,7 @@ my %stats = (
   removed_create_database => 0,
   removed_use => 0,
   removed_source_fk => 0,
+  removed_source_drop => 0,
   drops_inserted => 0,
   creates_seen => 0,
 );
@@ -54,6 +55,10 @@ sub append_file {
       $stats{removed_source_fk}++;
       next;
     }
+    if ($line =~ /^\s*DROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?/i) {
+      $stats{removed_source_drop}++;
+      next;
+    }
     if ($line =~ /^\s*CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?((?:`[^`]+`\.)?`[^`]+`|[^\s(]+)/i) {
       $stats{creates_seen}++;
       if ($is_schema) {
@@ -69,7 +74,8 @@ sub append_file {
 }
 
 append_file($_, 1) for @schema;
-append_file($_, 0) for @data;
+my $single_file_dump = scalar(@schema) == 0 && scalar(@data) == 1;
+append_file($_, $single_file_dump ? 1 : 0) for @data;
 print $out "/*!40014 SET FOREIGN_KEY_CHECKS=1*/;\n";
 close($out);
 
@@ -78,6 +84,7 @@ print "data_files=" . scalar(@data) . "\n";
 print "removed_create_database_lines=$stats{removed_create_database}\n";
 print "removed_use_lines=$stats{removed_use}\n";
 print "removed_source_fk_lines=$stats{removed_source_fk}\n";
+print "removed_source_drop_lines=$stats{removed_source_drop}\n";
 PERL
 }
 

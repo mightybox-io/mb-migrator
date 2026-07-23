@@ -8,10 +8,12 @@ PROG_NAME="${MB_MIGRATOR_PROG_NAME:-$(basename "${BASH_SOURCE[0]}")}"
 source "$ROOT_DIR/lib/util.sh"
 source "$ROOT_DIR/lib/archive.sh"
 source "$ROOT_DIR/lib/database.sh"
+source "$ROOT_DIR/lib/native-db.sh"
 source "$ROOT_DIR/lib/wp-content.sh"
 source "$ROOT_DIR/lib/wp-config.sh"
 source "$ROOT_DIR/lib/wp-cli.sh"
 source "$ROOT_DIR/providers/gridpane.sh"
+source "$ROOT_DIR/providers/legacy-mightybox.sh"
 
 COMMAND="${1:-}"
 if [[ -n "$COMMAND" ]]; then
@@ -25,7 +27,8 @@ Usage:
   @@PROG@@ doctor --target-root=/srv/htdocs [--archive=ARCHIVE.tar.gz]
 
 Options:
-  --provider=auto|gridpane          Export provider adapter to use. Default: auto
+  --provider=auto|gridpane|legacy-mightybox
+                                      Export provider adapter. Default: auto
   --target-root=PATH                WordPress document root to restore into
   --archive=PATH                    Archive path for doctor preflight checks
   --stage-dir=PATH                  Staging directory. Default: target-root/restore-<archive>-<timestamp>
@@ -39,6 +42,8 @@ Options:
   --root-extras=ask|copy|skip       What to do with non-core root files. Default: ask
   --replace-managed-symlinks        Replace destination symlink conflicts instead of preserving them
   --db-import=ask|yes|no            Import combined SQL with wp db import. Default: ask, default answer yes
+  --target-db-method=auto|wp-cli|native
+                                      Target database method. Default: auto
   --import-db                       Alias for --db-import=yes
   --no-import-db                    Alias for --db-import=no
   --skip-db-backup                  Do not run wp db export before database import
@@ -71,6 +76,7 @@ if [[ "$COMMAND" == "doctor" ]]; then
   ARCHIVE=""
   IMPORT_DB=0
   SEARCH_REPLACE=0
+  TARGET_DB_METHOD="auto"
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -78,6 +84,7 @@ if [[ "$COMMAND" == "doctor" ]]; then
       --archive=*) ARCHIVE="${1#*=}" ;;
       --import-db) IMPORT_DB=1 ;;
       --search-replace) SEARCH_REPLACE=1 ;;
+      --target-db-method=*) TARGET_DB_METHOD="${1#*=}" ;;
       --help|-h) usage; exit 0 ;;
       *) die "Unknown option for doctor: $1" ;;
     esac
@@ -89,7 +96,8 @@ if [[ "$COMMAND" == "doctor" ]]; then
   if [[ -n "$ARCHIVE" ]]; then
     ARCHIVE="$(abs_path "$ARCHIVE")"
   fi
-  preflight_environment "$TARGET_ROOT" "$ARCHIVE" "$IMPORT_DB" "$SEARCH_REPLACE"
+  case "$TARGET_DB_METHOD" in auto|wp-cli|native) ;; *) die "--target-db-method must be auto, wp-cli, or native" ;; esac
+  preflight_environment "$TARGET_ROOT" "$ARCHIVE" "$IMPORT_DB" "$SEARCH_REPLACE" "$TARGET_DB_METHOD"
   log "Doctor completed"
   exit 0
 fi
@@ -105,6 +113,12 @@ fi
 shift
 
 PROVIDER="auto"
+PROVIDER_ADAPTER=""
+PROVIDER_DB_DIR=""
+PROVIDER_WEB_ROOT=""
+PROVIDER_ROOT_EXTRA_FILES=()
+PROVIDER_WP_CONFIG_PATH=""
+PROVIDER_USER_CONFIGS_PATH=""
 TARGET_ROOT=""
 STAGE_DIR=""
 DB_OUTPUT=""
@@ -118,6 +132,7 @@ ROOT_EXTRAS_MODE="ask"
 REPLACE_MANAGED_SYMLINKS=0
 IMPORT_DB=0
 DB_IMPORT_MODE="ask"
+TARGET_DB_METHOD="auto"
 SKIP_DB_BACKUP=0
 SEARCH_REPLACE=0
 MIGRATE_CONFIG=0
@@ -138,6 +153,7 @@ while [[ $# -gt 0 ]]; do
     --root-extras=*) ROOT_EXTRAS_MODE="${1#*=}" ;;
     --replace-managed-symlinks) REPLACE_MANAGED_SYMLINKS=1 ;;
     --db-import=*) DB_IMPORT_MODE="${1#*=}" ;;
+    --target-db-method=*) TARGET_DB_METHOD="${1#*=}" ;;
     --import-db) DB_IMPORT_MODE="yes" ;;
     --no-import-db|--skip-db-import) DB_IMPORT_MODE="no" ;;
     --skip-db-backup) SKIP_DB_BACKUP=1 ;;
@@ -157,6 +173,7 @@ done
 case "$MU_PLUGINS_MODE" in ask|copy|skip) ;; *) die "--mu-plugins must be ask, copy, or skip" ;; esac
 case "$ROOT_EXTRAS_MODE" in ask|copy|skip) ;; *) die "--root-extras must be ask, copy, or skip" ;; esac
 case "$DB_IMPORT_MODE" in ask|yes|no) ;; *) die "--db-import must be ask, yes, or no" ;; esac
+case "$TARGET_DB_METHOD" in auto|wp-cli|native) ;; *) die "--target-db-method must be auto, wp-cli, or native" ;; esac
 case "$CLEANUP_MODE" in ask|yes|no) ;; *) die "--cleanup must be ask, yes, or no" ;; esac
 if [[ "$DB_IMPORT_MODE" != "no" && "$DRY_RUN" -ne 1 ]]; then
   IMPORT_DB=1
@@ -197,20 +214,29 @@ report "Archive: $ARCHIVE"
 report "Target root: $TARGET_ROOT"
 report "Stage dir: $STAGE_DIR"
 
-preflight_environment "$TARGET_ROOT" "$ARCHIVE" "$IMPORT_DB" "$SEARCH_REPLACE"
+preflight_environment "$TARGET_ROOT" "$ARCHIVE" "$IMPORT_DB" "$SEARCH_REPLACE" "$TARGET_DB_METHOD"
 
 archive_index "$ARCHIVE" "$STAGE_DIR"
 
 case "$PROVIDER" in
   auto)
-    if gridpane_detect "$ARCHIVE_INDEX"; then
+    if legacy_mightybox_detect "$ARCHIVE_INDEX"; then
+      PROVIDER="legacy-mightybox"
+      PROVIDER_ADAPTER="legacy_mightybox"
+    elif gridpane_detect "$ARCHIVE_INDEX"; then
       PROVIDER="gridpane"
+      PROVIDER_ADAPTER="gridpane"
     else
       die "Could not auto-detect export provider"
     fi
     ;;
   gridpane)
     gridpane_detect "$ARCHIVE_INDEX" || die "Archive does not look like a GridPane export"
+    PROVIDER_ADAPTER="gridpane"
+    ;;
+  legacy-mightybox)
+    legacy_mightybox_detect "$ARCHIVE_INDEX" || die "Archive does not look like a legacy MightyBox snapshot"
+    PROVIDER_ADAPTER="legacy_mightybox"
     ;;
   *) die "Unsupported provider: $PROVIDER" ;;
 esac
@@ -219,11 +245,12 @@ log "Provider: $PROVIDER"
 report "Provider: $PROVIDER"
 
 log "Reading provider layout"
-gridpane_load_layout "$ARCHIVE_INDEX"
+"${PROVIDER_ADAPTER}_load_layout" "$ARCHIVE_INDEX"
 log "Selecting optional paths"
-gridpane_select_optional_paths "$MU_PLUGINS_MODE" "$ROOT_EXTRAS_MODE"
+"${PROVIDER_ADAPTER}_select_optional_paths" "$MU_PLUGINS_MODE" "$ROOT_EXTRAS_MODE"
 log "Extracting provider paths"
-gridpane_extract "$ARCHIVE" "$STAGE_DIR" "$INCLUDE_MU_PLUGINS"
+"${PROVIDER_ADAPTER}_extract" "$ARCHIVE" "$STAGE_DIR" "$INCLUDE_MU_PLUGINS"
+"${PROVIDER_ADAPTER}_publish_layout"
 
 if [[ -z "$DB_OUTPUT" ]]; then
   archive_base="$(basename "$ARCHIVE")"
@@ -232,18 +259,18 @@ if [[ -z "$DB_OUTPUT" ]]; then
   DB_OUTPUT="$STAGE_DIR/${archive_base}-combined-phpmyadmin-import.sql"
 fi
 
-combine_database_sql "$STAGE_DIR/$GRIDPANE_DB_DIR" "$DB_OUTPUT"
+combine_database_sql "$STAGE_DIR/$PROVIDER_DB_DIR" "$DB_OUTPUT"
 verify_database_sql "$DB_OUTPUT"
 
-merge_wp_content "$STAGE_DIR/$GRIDPANE_WEB_ROOT/wp-content" "$TARGET_ROOT/wp-content"
-copy_web_root_files "$STAGE_DIR/$GRIDPANE_WEB_ROOT" "$TARGET_ROOT" "${GRIDPANE_ROOT_EXTRA_FILES[@]}"
+merge_wp_content "$STAGE_DIR/$PROVIDER_WEB_ROOT/wp-content" "$TARGET_ROOT/wp-content"
+copy_web_root_files "$STAGE_DIR/$PROVIDER_WEB_ROOT" "$TARGET_ROOT" "${PROVIDER_ROOT_EXTRA_FILES[@]}"
 SOURCE_WP_CONFIG=""
 SOURCE_USER_CONFIGS=""
-if [[ -n "${GRIDPANE_WP_CONFIG_PATH:-}" ]]; then
-  SOURCE_WP_CONFIG="$STAGE_DIR/$GRIDPANE_WP_CONFIG_PATH"
+if [[ -n "${PROVIDER_WP_CONFIG_PATH:-}" ]]; then
+  SOURCE_WP_CONFIG="$STAGE_DIR/$PROVIDER_WP_CONFIG_PATH"
 fi
-if [[ -n "${GRIDPANE_USER_CONFIGS_PATH:-}" ]]; then
-  SOURCE_USER_CONFIGS="$STAGE_DIR/$GRIDPANE_USER_CONFIGS_PATH"
+if [[ -n "${PROVIDER_USER_CONFIGS_PATH:-}" ]]; then
+  SOURCE_USER_CONFIGS="$STAGE_DIR/$PROVIDER_USER_CONFIGS_PATH"
 fi
 wp_config_report "$SOURCE_WP_CONFIG" "$TARGET_ROOT/wp-config.php" "$STAGE_DIR"
 wp_config_report_named "user-configs.php" "$SOURCE_USER_CONFIGS" "$TARGET_ROOT/user-configs.php" "$STAGE_DIR" "user-configs"

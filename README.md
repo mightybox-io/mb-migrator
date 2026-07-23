@@ -4,6 +4,123 @@
 
 It is built for migration work where a single provider export archive contains site files plus split SQL database dumps. The first supported provider adapter is GridPane-style SFTP exports. The project is intentionally modular so support for other providers can be added behind provider adapters.
 
+It can also pull a single-site WordPress installation directly from a legacy MightyBox host over SSH. The live workflow is controlled entirely from the new host; the legacy host does not need a copy of this repository.
+
+## Live Legacy MightyBox Migration
+
+Legacy sites are expected at `/var/www/webroot/ROOT` by default. Run the migrator from the new host as the user that can write the destination WordPress root.
+
+### One-Line Remote Use
+
+The repository does not need to be cloned onto the new host. Each command downloads a temporary copy of the migrator, while SSH keys, migration state, and retained snapshots remain in the new host user's private state directory.
+
+Pair the new host with the legacy host:
+
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/mightybox-io/mb-migrator/main/remote-run.sh)" -- \
+  pair user@legacy-host
+```
+
+Preflight both hosts:
+
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/mightybox-io/mb-migrator/main/remote-run.sh)" -- \
+  doctor \
+  --source=user@legacy-host \
+  --source-root=/var/www/webroot/ROOT \
+  --target-root=/srv/htdocs
+```
+
+Run the migration:
+
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/mightybox-io/mb-migrator/main/remote-run.sh)" -- \
+  pull user@legacy-host \
+  --source-root=/var/www/webroot/ROOT \
+  --target-root=/srv/htdocs \
+  --new-url=https://new.example.com
+```
+
+Run the same migration again as a catch-up before cutover:
+
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/mightybox-io/mb-migrator/main/remote-run.sh)" -- \
+  pull user@legacy-host \
+  --source-root=/var/www/webroot/ROOT \
+  --target-root=/srv/htdocs \
+  --continue-existing
+```
+
+Set `MB_MIGRATOR_REF` before the command to run a specific branch, tag, or commit instead of `main`.
+
+Pair the hosts first:
+
+```bash
+./bin/mb-migrator pair user@legacy-host
+```
+
+The command creates a dedicated Ed25519 key and attempts to install it with `ssh-copy-id`. If password-based installation is unavailable, it prints a public-key command to run from an authorized SSH session on the legacy host. Existing keys can be used with `--identity-file`.
+
+Preflight both hosts without transferring the site:
+
+```bash
+./bin/mb-migrator doctor \
+  --source=user@legacy-host \
+  --source-root=/var/www/webroot/ROOT \
+  --target-root=/srv/htdocs
+```
+
+Pull and restore the site:
+
+```bash
+./bin/mb-migrator pull user@legacy-host \
+  --source-root=/var/www/webroot/ROOT \
+  --target-root=/srv/htdocs \
+  --old-url=https://legacy.example.com \
+  --new-url=https://example.com \
+  --db-import=yes \
+  --yes
+```
+
+When `--new-url` is supplied without `--old-url`, the migrator tries to read the source home URL with WP-CLI and then with a native database query. Serialized-safe URL replacement runs on the new host. If WP-CLI is unavailable there, migration completes with a prominent “URL rewrite pending” warning and the follow-up command is written to the report.
+
+### Catch-up Runs
+
+Migration state is identified by source host, SSH port, source root, and target root. Repeating the same pull interactively prompts to continue the existing migration, restart it, or cancel. For unattended operation, choose explicitly:
+
+```bash
+./bin/mb-migrator pull user@legacy-host \
+  --target-root=/srv/htdocs \
+  --continue-existing \
+  --db-import=yes \
+  --yes
+```
+
+A catch-up always takes a fresh full database dump. When `rsync` exists on both hosts, only new and changed files cross SSH. Otherwise, the migrator automatically retransfers a complete tar snapshot. Source deletions are never propagated to the destination.
+
+Detected or supplied old/new URLs are saved in the private migration state and automatically reused during catch-up, so importing the fresh database does not undo the destination URL rewrite.
+
+Use `--restart` to delete only the matching migration state and begin again. In an interactive session the exact state path is shown before restart. `--yes` by itself never selects this destructive action.
+
+### Database Fallback
+
+Source export and target backup/import support:
+
+```text
+--source-db-method=auto|wp-cli|native
+--target-db-method=auto|wp-cli|native
+```
+
+`auto` tries WP-CLI first and falls back to `mariadb-dump`/`mysqldump` or `mariadb`/`mysql`. Native mode reads `DB_NAME`, `DB_USER`, `DB_PASSWORD`, and `DB_HOST` from `wp-config.php` without bootstrapping WordPress. Quoted literals and simple `getenv('NAME')` values are supported, including host ports and Unix sockets. Unsupported dynamic expressions fail preflight with the unresolved setting named.
+
+Credentials are written only to temporary mode-`0600` client files and are never placed in process arguments, reports, snapshots, or saved migration state. The live snapshot also excludes `wp-config.php`.
+
+### State and Consistency
+
+Private state defaults to `$XDG_STATE_HOME/mb-migrator` or `$HOME/.local/state/mb-migrator`. State directories use mode `0700`; keys, dumps, manifests, and snapshots use mode `0600`. Successful snapshots are retained by default for retry and audit. Pass `--snapshot=delete` to remove the snapshot after a successful restore.
+
+Version one supports WordPress single-site installations. Multisite is rejected during preflight. A live site can change while files and database are collected, so the recommended cutover is an initial pull followed by a catch-up immediately before DNS or proxy cutover, after pausing content changes when possible.
+
 ## One-Line Remote Run
 
 Run without installing the repo first:
@@ -340,7 +457,8 @@ In `--dry-run` mode, WP-CLI search-replace is also run with `--dry-run`.
 ## Options
 
 ```text
---provider=auto|gridpane          Export provider adapter to use. Default: auto
+--provider=auto|gridpane|legacy-mightybox
+                                  Export provider adapter to use. Default: auto
 --target-root=PATH                WordPress document root to restore into
 --stage-dir=PATH                  Staging directory. Default: target-root/restore-<archive>-<timestamp>
 --db-output=PATH                  Combined SQL output path. Default: stage/<archive>-combined-phpmyadmin-import.sql
@@ -353,6 +471,8 @@ In `--dry-run` mode, WP-CLI search-replace is also run with `--dry-run`.
 --root-extras=ask|copy|skip       What to do with non-core root files. Default: ask
 --replace-managed-symlinks        Replace destination symlink conflicts instead of preserving them
 --db-import=ask|yes|no            Import combined SQL with wp db import. Default: ask, default answer yes
+--target-db-method=auto|wp-cli|native
+                                  Target database method. Default: auto
 --import-db                       Alias for --db-import=yes
 --no-import-db                    Alias for --db-import=no
 --skip-db-backup                  Do not run wp db export before database import
@@ -375,9 +495,17 @@ Required for basic restore:
 - `rsync`
 - `awk`
 
-Required for DB import and search-replace:
+Required for database backup/import:
 
-- WP-CLI, available as `wp`
+- WP-CLI, available as `wp`, or PHP CLI plus native MariaDB/MySQL dump and client commands.
+
+WP-CLI is specifically required for serialized-safe search-replace. If it is unavailable, the database migration succeeds and the rewrite is reported as pending.
+
+Required on a legacy live source:
+
+- Bash and `tar`.
+- WP-CLI or PHP CLI plus `mariadb-dump`/`mysqldump`.
+- `rsync` is optional; without it, catch-ups use full tar transfer.
 
 Required for one-line remote use:
 
@@ -414,7 +542,8 @@ The doctor command checks:
 - Shared/symlinked core markers such as `__wp__` and `wp-load.php` are visible when present.
 - The target root appears writable by the current user.
 - Required shell tools are available.
-- WP-CLI is available when DB import or search-replace will be used.
+- WP-CLI or the native database fallback is available when DB import will be used.
+- Missing WP-CLI is reported as a pending rewrite when search-replace is requested.
 - WP-CLI site installation checks are skipped because the database may not be imported yet.
 - Disk-space information can be read when the platform exposes it.
 
@@ -432,9 +561,11 @@ Run the included smoke test:
 
 ```bash
 ./tests/smoke.sh
+./tests/live-smoke.sh
+./tests/native-db-smoke.sh
 ```
 
-It builds a small GridPane-style fixture archive, restores it into a disposable target, verifies file copies, verifies SQL safety rules, and cleans up generated artifacts.
+The tests cover GridPane restore compatibility, live legacy pull and catch-up behavior, snapshot security, SQL normalization, and native target database backup/import.
 
 Keep generated smoke artifacts for debugging:
 
@@ -446,9 +577,10 @@ KEEP_SMOKE_ARTIFACTS=1 ./tests/smoke.sh
 
 Provider-specific logic lives in `providers/`.
 
-Current adapter:
+Current adapters:
 
 - `gridpane.sh`
+- `legacy-mightybox.sh`
 
 Future adapters should follow the same shape:
 

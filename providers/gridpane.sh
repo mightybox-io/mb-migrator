@@ -188,3 +188,11 @@ gridpane_extract() {
 
   archive_extract_existing_paths "$archive" "$stage_dir" "${paths[@]}"
 }
+
+gridpane_publish_layout() {
+  PROVIDER_DB_DIR="$GRIDPANE_DB_DIR"
+  PROVIDER_WEB_ROOT="$GRIDPANE_WEB_ROOT"
+  PROVIDER_ROOT_EXTRA_FILES=("${GRIDPANE_ROOT_EXTRA_FILES[@]}")
+  PROVIDER_WP_CONFIG_PATH="$GRIDPANE_WP_CONFIG_PATH"
+  PROVIDER_USER_CONFIGS_PATH="$GRIDPANE_USER_CONFIGS_PATH"
+}
