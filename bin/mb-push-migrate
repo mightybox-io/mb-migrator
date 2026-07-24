@@ -177,7 +177,7 @@ push_site() (
   local pairing_id="" source_root="" source_db_method="auto" target_root="" new_url=""
   local state_dir pair_dir key_file destination port ssh_dir work package
   local remote_output remote_dir remote_package remote_runner remote_command cleanup_command url_command
-  local repo ref arg
+  local repo ref arg option_name detected_url
   local -a restore_args ssh_args scp_args
 
   state_dir="$(default_state_dir)"
@@ -232,21 +232,27 @@ push_site() (
   fi
 
   if [[ -z "$new_url" ]]; then
-    url_command=""
-    append_shell_arg url_command wp
-    append_shell_arg url_command "--path=$target_root"
-    append_shell_arg url_command --skip-plugins
-    append_shell_arg url_command --skip-themes
-    append_shell_arg url_command option
-    append_shell_arg url_command get
-    append_shell_arg url_command home
-    append_shell_arg url_command --quiet
-    if ! new_url="$(ssh "${ssh_args[@]}" "$destination" "$url_command" 2>/dev/null |
-      tr -d '\r' | awk 'NF{value=$0} END{print value}')"; then
-      new_url=""
-    fi
+    for option_name in home siteurl; do
+      url_command=""
+      append_shell_arg url_command wp
+      append_shell_arg url_command "--path=$target_root"
+      append_shell_arg url_command --skip-plugins
+      append_shell_arg url_command --skip-themes
+      append_shell_arg url_command option
+      append_shell_arg url_command get
+      append_shell_arg url_command "$option_name"
+      append_shell_arg url_command --quiet
+      if ! detected_url="$(ssh "${ssh_args[@]}" "$destination" "$url_command" 2>/dev/null |
+        tr -d '\r' | awk 'NF{value=$0} END{print value}')"; then
+        detected_url=""
+      fi
+      if [[ "$detected_url" =~ ^https?://[^[:space:]]+$ ]]; then
+        new_url="$detected_url"
+        break
+      fi
+    done
     [[ "$new_url" =~ ^https?://[^[:space:]]+$ ]] ||
-      die "Could not detect the destination home URL with WP-CLI; pass --new-url explicitly"
+      die "Could not detect destination home or siteurl with WP-CLI; pass --new-url explicitly"
     restore_args+=("--new-url=$new_url")
     log "Detected destination URL: $new_url"
   fi
