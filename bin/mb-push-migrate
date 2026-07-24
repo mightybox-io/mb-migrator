@@ -24,6 +24,7 @@ Push options:
   --source-db-method=auto|wp-cli|native
                                        Default: auto
   --target-root=PATH                   Destination WordPress document root
+  --new-url=URL                        Default: destination WP-CLI home URL
   --state-dir=PATH                     Persistent private pairing state
 
 All other push-site options are forwarded to import-site on the destination.
@@ -173,9 +174,9 @@ append_shell_arg() {
 }
 
 push_site() (
-  local pairing_id="" source_root="" source_db_method="auto" target_root=""
+  local pairing_id="" source_root="" source_db_method="auto" target_root="" new_url=""
   local state_dir pair_dir key_file destination port ssh_dir work package
-  local remote_output remote_dir remote_package remote_runner remote_command cleanup_command
+  local remote_output remote_dir remote_package remote_runner remote_command cleanup_command url_command
   local repo ref arg
   local -a restore_args ssh_args scp_args
 
@@ -187,6 +188,7 @@ push_site() (
       --source-root=*) source_root="${1#*=}" ;;
       --source-db-method=*) source_db_method="${1#*=}" ;;
       --target-root=*) target_root="${1#*=}"; restore_args+=("$1") ;;
+      --new-url=*) new_url="${1#*=}"; restore_args+=("$1") ;;
       --state-dir=*) state_dir="${1#*=}" ;;
       --help|-h) usage; exit 0 ;;
       --provider=*) die "push-site selects the wordpress-package provider automatically" ;;
@@ -218,6 +220,26 @@ push_site() (
   scp_args=(-P "$port" -i "$key_file" -o BatchMode=yes -o IdentitiesOnly=yes -o "UserKnownHostsFile=$ssh_dir/known_hosts")
   log "Verifying saved SSH pairing"
   ssh "${ssh_args[@]}" "$destination" true || die "Saved SSH pairing could not connect"
+
+  if [[ -z "$new_url" ]]; then
+    url_command=""
+    append_shell_arg url_command wp
+    append_shell_arg url_command "--path=$target_root"
+    append_shell_arg url_command --skip-plugins
+    append_shell_arg url_command --skip-themes
+    append_shell_arg url_command option
+    append_shell_arg url_command get
+    append_shell_arg url_command home
+    append_shell_arg url_command --quiet
+    if ! new_url="$(ssh "${ssh_args[@]}" "$destination" "$url_command" 2>/dev/null |
+      tr -d '\r' | awk 'NF{value=$0} END{print value}')"; then
+      new_url=""
+    fi
+    [[ "$new_url" =~ ^https?://[^[:space:]]+$ ]] ||
+      die "Could not detect the destination home URL with WP-CLI; pass --new-url explicitly"
+    restore_args+=("--new-url=$new_url")
+    log "Detected destination URL: $new_url"
+  fi
 
   work="$(mktemp -d "${MB_MIGRATOR_TMPDIR:-${TMPDIR:-/tmp}}/mb-push-site.XXXXXX")"
   trap 'rm -rf "$work"' EXIT

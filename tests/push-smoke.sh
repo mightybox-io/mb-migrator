@@ -18,6 +18,7 @@ printf '%s\n' '#!/usr/bin/env bash' \
   'command_text="${!#}"' \
   'case "$command_text" in' \
   '  true) exit 0 ;;' \
+  '  *"option get home"*) printf '\''https://destination-push.example.test\n'\'' ;;' \
   '  *"__MB_REMOTE_DIR__"*) printf '\''__MB_REMOTE_DIR__=/home/destination/.local/state/mb-migrator/incoming/push.test123\n'\'' ;;' \
   '  *"rm -f"*) printf '\''%s\n'\'' "$command_text" > "$PUSH_CLEANUP_MARKER" ;;' \
   '  *"remote-run.sh"*) printf '\''%s\n'\'' "$command_text" > "$PUSH_IMPORT_MARKER" ;;' \
@@ -76,7 +77,6 @@ PATH="$FAKE_BIN:$PATH" "$ROOT_DIR/bin/mb-migrator" push-site \
   "--source-root=$SOURCE" \
   --source-db-method=native \
   --target-root=/home/newuser/htdocs \
-  --new-url=https://destination-push.example.test \
   --target-db-method=native \
   --db-import=yes \
   --mu-plugins=skip \

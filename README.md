@@ -103,11 +103,10 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/mightybox-io/mb-migrator
   --source-root=/var/www/webroot/ROOT \
   --source-db-method=auto \
   --target-root=/home/DESTINATION_USER/htdocs \
-  --new-url=https://new.example.com \
   --target-db-method=auto
 ```
 
-`push-site` creates a temporary portable package on the source, transfers the package and checksum over the saved SSH pairing, starts `import-site` on the destination, and displays its prompts in the source terminal. Successful runs remove the temporary source package and destination transfer directory. When the destination import fails, the transferred package is retained and its remote path is printed for recovery.
+`push-site` reads the destination site's current `home` URL with WP-CLI and uses it as the new URL for serialized-safe search-replace. Pass `--new-url` only to override that detected value. It then creates a temporary portable package on the source, transfers the package and checksum over the saved SSH pairing, starts `import-site` on the destination, and displays its prompts in the source terminal. Successful runs remove the temporary source package and destination transfer directory. When the destination import fails, the transferred package is retained and its remote path is printed for recovery.
 
 Pairing state is private and persists under `~/.local/state/mb-migrator/push-pairings` by default. Use `--state-dir` consistently across prepare, complete, and push when a different location is required. Force native source export with `--source-db-method=native` when source WP-CLI is unavailable.
 
