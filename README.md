@@ -76,6 +76,8 @@ Portable packages contain the database, `wp-content`, non-core root-file candida
 
 While collecting site files, the exporter reports the compressed archive size and elapsed time every five seconds, followed by a final size and duration. This is activity progress rather than a percentage because compression ratios vary across site content. Set `MB_MIGRATOR_PROGRESS_INTERVAL` to a positive number of seconds to change the reporting interval.
 
+On a live site, GNU tar may report that the `wp-content` directory changed while it was being traversed. The exporter accepts a valid archive when that is the only warning and reports that the live snapshot may not include entries created during collection. Changed file contents, unreadable files, invalid archives, and all other tar failures remain fatal.
+
 ## Outbound SSH Push Migration
 
 Use the outbound push workflow when the old host cannot accept inbound SSH but can connect outward to the new host. Pairing is prepared on the old host before the destination username exists. The private key never leaves the old host; install only the generated public key on the new SSH account.

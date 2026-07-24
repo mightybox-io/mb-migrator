@@ -157,15 +157,30 @@ is_core_root_file() {
 }
 
 archive_files() {
-  local include_content="$1" item name
+  local include_content="$1" item name tar_status=0 tar_errors
   local paths=()
   [[ "$include_content" -eq 0 ]] || paths+=("wp-content")
   while IFS= read -r item; do
     name="${item#./}"
     is_core_root_file "$name" || paths+=("$name")
   done < <(cd "$source_root" && find . -mindepth 1 -maxdepth 1 -type f -print | LC_ALL=C sort)
-  if [[ "${#paths[@]}" -gt 0 ]]; then tar -czf - -C "$source_root" -- "${paths[@]}"
-  else tar -czf - -C "$source_root" --files-from /dev/null; fi
+  tar_errors="$(mktemp "${TMPDIR:-/tmp}/mb-migrator-tar-errors.XXXXXX")"
+  trap 'rm -f "$tar_errors"' RETURN
+  if [[ "${#paths[@]}" -gt 0 ]]; then
+    tar -czf - -C "$source_root" -- "${paths[@]}" 2> "$tar_errors" || tar_status=$?
+  else
+    tar -czf - -C "$source_root" --files-from /dev/null 2> "$tar_errors" || tar_status=$?
+  fi
+  if [[ "$tar_status" -eq 1 ]] && [[ -s "$tar_errors" ]] &&
+     ! grep -Ev '^tar: (\./)?wp-content: file changed as we read it$' "$tar_errors" | grep -q .; then
+    printf '[source-collector:warn] wp-content changed during collection; continuing with the valid live snapshot\n' >&2
+    tar_status=0
+  elif [[ "$tar_status" -ne 0 ]]; then
+    cat "$tar_errors" >&2
+  fi
+  rm -f "$tar_errors"
+  trap - RETURN
+  return "$tar_status"
 }
 
 case "$command_name" in

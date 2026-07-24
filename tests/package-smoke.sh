@@ -6,11 +6,12 @@ TEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/mb-package-test.XXXXXX")"
 SOURCE="$TEST_ROOT/source"
 TARGET="$TEST_ROOT/target"
 FAKE_BIN="$TEST_ROOT/bin"
+CHURN_BIN="$TEST_ROOT/churn-bin"
 PACKAGE="$TEST_ROOT/portable-site.tar.gz"
 trap 'rm -rf "$TEST_ROOT"' EXIT
 
 mkdir -p "$SOURCE/wp-content/plugins/sample-plugin" "$SOURCE/wp-content/themes/sample-theme" "$SOURCE/wp-content/uploads/2026/07"
-mkdir -p "$TARGET/wp-content/plugins" "$TARGET/wp-content/themes" "$TARGET/wp-content/uploads" "$FAKE_BIN"
+mkdir -p "$TARGET/wp-content/plugins" "$TARGET/wp-content/themes" "$TARGET/wp-content/uploads" "$FAKE_BIN" "$CHURN_BIN"
 printf '%s\n' '<?php // plugin' > "$SOURCE/wp-content/plugins/sample-plugin/plugin.php"
 printf '%s\n' '/* theme */' > "$SOURCE/wp-content/themes/sample-theme/style.css"
 printf '%s\n' 'package upload' > "$SOURCE/wp-content/uploads/2026/07/package.txt"
@@ -35,6 +36,17 @@ export DB_NAME="source_db"
 export DB_USER="source_user"
 export DB_PASSWORD="package-secret"
 export DB_HOST="localhost"
+export REAL_TAR="$(command -v tar)"
+printf '%s\n' '#!/usr/bin/env bash' \
+  'set -euo pipefail' \
+  'LC_ALL=C "$REAL_TAR" "$@"' \
+  'printf '\''tar: wp-content: file changed as we read it\n'\'' >&2' \
+  'exit 1' > "$CHURN_BIN/tar"
+chmod +x "$CHURN_BIN/tar"
+PATH="$CHURN_BIN:$FAKE_BIN:$PATH" bash "$ROOT_DIR/lib/remote-source.sh" \
+  archive-files "$SOURCE" native > "$TEST_ROOT/churn.tar.gz"
+"$REAL_TAR" -tzf "$TEST_ROOT/churn.tar.gz" >/dev/null
+
 PATH="$FAKE_BIN:$PATH" "$ROOT_DIR/bin/mb-migrator" export-site \
   --source-root="$SOURCE" \
   --output="$PACKAGE" \
