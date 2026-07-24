@@ -6,7 +6,7 @@ combine_database_sql() {
 
   [[ -d "$db_dir" ]] || die "Database directory not found: $db_dir"
 
-  log "Combining database SQL files"
+  log "Preparing and normalizing database SQL"
   perl - "$db_dir" "$outfile" <<'PERL'
 use strict;
 use warnings;

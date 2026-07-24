@@ -7,7 +7,7 @@ merge_wp_content() {
   [[ -d "$source_wp_content" ]] || die "Source wp-content not found: $source_wp_content"
   [[ -d "$dest_wp_content" ]] || die "Destination wp-content not found: $dest_wp_content"
 
-  log "Merging wp-content assets"
+  log "Overlaying staged plugins, themes, and uploads onto the destination"
   merge_wp_content_subdir "$source_wp_content" "$dest_wp_content" "plugins"
   merge_wp_content_subdir "$source_wp_content" "$dest_wp_content" "themes"
   merge_wp_content_subdir "$source_wp_content" "$dest_wp_content" "uploads"
