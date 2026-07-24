@@ -102,7 +102,7 @@ verify_database_sql() {
   local outfile="$1"
   [[ -f "$outfile" ]] || die "Combined SQL not found: $outfile"
 
-  log "Verifying combined SQL"
+  log "Checking prepared SQL for unsafe or inconsistent statements"
   local output
   output="$(perl -ne '
     $bad_tz++ if /TIME_ZONE\s*=\s*\+\d\d:\d\d/i;
