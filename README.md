@@ -74,6 +74,8 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/mightybox-io/mb-migrator
 
 Portable packages contain the database, `wp-content`, non-core root-file candidates, and source URL metadata. They exclude WordPress core and `wp-config.php`. Package files use mode `0600`, and temporary work directories use mode `0700`. The source host needs temporary free space for an extracted copy of the selected site files plus the final compressed package.
 
+While collecting site files, the exporter reports the compressed archive size and elapsed time every five seconds, followed by a final size and duration. This is activity progress rather than a percentage because compression ratios vary across site content. Set `MB_MIGRATOR_PROGRESS_INTERVAL` to a positive number of seconds to change the reporting interval.
+
 ## Outbound SSH Push Migration
 
 Use the outbound push workflow when the old host cannot accept inbound SSH but can connect outward to the new host. Pairing is prepared on the old host before the destination username exists. The private key never leaves the old host; install only the generated public key on the new SSH account.

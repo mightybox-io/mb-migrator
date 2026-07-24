@@ -38,10 +38,11 @@ export DB_HOST="localhost"
 PATH="$FAKE_BIN:$PATH" "$ROOT_DIR/bin/mb-migrator" export-site \
   --source-root="$SOURCE" \
   --output="$PACKAGE" \
-  --db-method=native
+  --db-method=native | tee "$TEST_ROOT/export.log"
 
 test -s "$PACKAGE"
 test -s "$PACKAGE.sha256"
+grep -q 'Collected WordPress files:' "$TEST_ROOT/export.log"
 tar -tzf "$PACKAGE" | grep -q '^mb-wordpress-package-manifest$'
 tar -tzf "$PACKAGE" | grep -q '^database-package/site.sql$'
 tar -tzf "$PACKAGE" | grep -q '^htdocs/wp-content/plugins/sample-plugin/plugin.php$'

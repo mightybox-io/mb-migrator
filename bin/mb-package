@@ -29,6 +29,51 @@ hash_file() {
   else die "Required command not found: sha256sum or shasum"; fi
 }
 
+format_bytes() {
+  awk -v bytes="$1" 'BEGIN {
+    if (bytes >= 1073741824) printf "%.2f GiB", bytes / 1073741824;
+    else if (bytes >= 1048576) printf "%.1f MiB", bytes / 1048576;
+    else if (bytes >= 1024) printf "%.1f KiB", bytes / 1024;
+    else printf "%d B", bytes;
+  }'
+}
+
+collect_files_with_progress() {
+  local source_root="$1" db_method="$2" output="$3"
+  local collector_pid reporter_pid status start_time end_time bytes elapsed interval
+  interval="${MB_MIGRATOR_PROGRESS_INTERVAL:-5}"
+  [[ "$interval" =~ ^[1-9][0-9]*$ ]] || die "MB_MIGRATOR_PROGRESS_INTERVAL must be a positive integer"
+  : > "$output"
+  start_time="$(date +%s)"
+  bash "$ROOT_DIR/lib/remote-source.sh" archive-files "$source_root" "$db_method" > "$output" &
+  collector_pid=$!
+  (
+    sleep_pid=""
+    trap '[[ -z "$sleep_pid" ]] || kill "$sleep_pid" 2>/dev/null || true; exit 0' TERM INT
+    while kill -0 "$collector_pid" 2>/dev/null; do
+      sleep "$interval" &
+      sleep_pid=$!
+      wait "$sleep_pid" 2>/dev/null || exit 0
+      sleep_pid=""
+      kill -0 "$collector_pid" 2>/dev/null || exit 0
+      bytes="$(wc -c < "$output" | tr -d '[:space:]')"
+      elapsed="$(( $(date +%s) - start_time ))"
+      log "Collecting WordPress files: $(format_bytes "$bytes") compressed, ${elapsed}s elapsed"
+    done
+  ) &
+  reporter_pid=$!
+
+  if wait "$collector_pid"; then status=0; else status=$?; fi
+  kill "$reporter_pid" 2>/dev/null || true
+  wait "$reporter_pid" 2>/dev/null || true
+  [[ "$status" -eq 0 ]] || return "$status"
+
+  end_time="$(date +%s)"
+  bytes="$(wc -c < "$output" | tr -d '[:space:]')"
+  elapsed="$(( end_time - start_time ))"
+  log "Collected WordPress files: $(format_bytes "$bytes") compressed in ${elapsed}s"
+}
+
 export_site() (
   local source_root="" output="" db_method="auto"
   local work output_tmp checksum_tmp source_url package_stage
@@ -60,6 +105,8 @@ export_site() (
 
   need_cmd bash
   need_cmd tar
+  need_cmd wc
+  need_cmd tr
   work="$(mktemp -d "${TMPDIR:-/tmp}/mb-wordpress-package.XXXXXX")"
   output_tmp="$output.tmp.$$"
   checksum_tmp="$output.sha256.tmp.$$"
@@ -77,7 +124,7 @@ export_site() (
   bash "$ROOT_DIR/lib/remote-source.sh" preflight "$source_root" "$db_method"
 
   log "Collecting WordPress files"
-  bash "$ROOT_DIR/lib/remote-source.sh" archive-files "$source_root" "$db_method" > "$work/files.tar.gz"
+  collect_files_with_progress "$source_root" "$db_method" "$work/files.tar.gz"
   tar -tzf "$work/files.tar.gz" >/dev/null
   tar -xzf "$work/files.tar.gz" -C "$package_stage/htdocs"
 
