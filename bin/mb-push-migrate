@@ -176,7 +176,7 @@ append_shell_arg() {
 push_site() (
   local pairing_id="" source_root="" source_db_method="auto" target_root="" new_url=""
   local state_dir pair_dir key_file destination port ssh_dir work package
-  local remote_output remote_dir remote_package remote_runner remote_command cleanup_command url_command
+  local remote_output remote_dir remote_package remote_runner remote_command import_command cleanup_command url_command login_command
   local repo ref arg option_name detected_url
   local -a restore_args ssh_args scp_args
 
@@ -242,7 +242,8 @@ push_site() (
       append_shell_arg url_command get
       append_shell_arg url_command "$option_name"
       append_shell_arg url_command --quiet
-      if ! detected_url="$(ssh "${ssh_args[@]}" "$destination" "$url_command" 2>/dev/null |
+      printf -v login_command 'bash -lc %q' "$url_command"
+      if ! detected_url="$(ssh "${ssh_args[@]}" "$destination" "$login_command" 2>/dev/null |
         tr -d '\r' | awk 'NF{value=$0} END{print value}')"; then
         detected_url=""
       fi
@@ -281,10 +282,11 @@ push_site() (
   ref="${MB_MIGRATOR_REF:-main}"
   [[ "$repo" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || die "Invalid repository name: $repo"
   [[ "$ref" =~ ^[A-Za-z0-9._/-]+$ ]] || die "Invalid repository ref: $ref"
-  printf -v remote_command 'MB_MIGRATOR_REPO=%q MB_MIGRATOR_REF=%q bash %q' "$repo" "$ref" "$remote_runner"
-  append_shell_arg remote_command import-site
-  append_shell_arg remote_command "$remote_package"
-  for arg in "${restore_args[@]}"; do append_shell_arg remote_command "$arg"; done
+  printf -v import_command 'MB_MIGRATOR_REPO=%q MB_MIGRATOR_REF=%q bash %q' "$repo" "$ref" "$remote_runner"
+  append_shell_arg import_command import-site
+  append_shell_arg import_command "$remote_package"
+  for arg in "${restore_args[@]}"; do append_shell_arg import_command "$arg"; done
+  printf -v remote_command 'bash -lc %q' "$import_command"
 
   log "Starting destination import"
   if [[ -t 0 && -t 1 ]]; then

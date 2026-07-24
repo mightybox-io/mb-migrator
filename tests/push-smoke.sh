@@ -19,8 +19,8 @@ printf '%s\n' '#!/usr/bin/env bash' \
   'case "$command_text" in' \
   '  true) exit 0 ;;' \
   '  *"__MB_TARGET_ROOT__"*) printf '\''__MB_TARGET_ROOT__=/srv/htdocs\n'\'' ;;' \
-  '  *"option get home"*) exit 1 ;;' \
-  '  *"option get siteurl"*) printf '\''https://destination-push.example.test\n'\'' ;;' \
+  '  *"option"*get*home*) exit 1 ;;' \
+  '  *"option"*get*siteurl*) printf '\''https://destination-push.example.test\n'\'' ;;' \
   '  *"__MB_REMOTE_DIR__"*) printf '\''__MB_REMOTE_DIR__=/home/destination/.local/state/mb-migrator/incoming/push.test123\n'\'' ;;' \
   '  *"rm -f"*) printf '\''%s\n'\'' "$command_text" > "$PUSH_CLEANUP_MARKER" ;;' \
   '  *"remote-run.sh"*) printf '\''%s\n'\'' "$command_text" > "$PUSH_IMPORT_MARKER" ;;' \
