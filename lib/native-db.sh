@@ -3,7 +3,7 @@
 wp_config_value() {
   local target_root="$1" key="$2" type="${3:-constant}" value=""
   if command -v wp >/dev/null 2>&1; then
-    if value="$(wp --path="$target_root" --skip-plugins --skip-themes config get "$key" --type="$type" --quiet 2>/dev/null)"; then
+    if value="$(wp_in_root "$target_root" --skip-plugins --skip-themes config get "$key" --type="$type" --quiet 2>/dev/null)"; then
       printf '%s' "$value"
       return 0
     fi

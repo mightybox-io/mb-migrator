@@ -75,4 +75,24 @@ if grep -R -l -e 'target-secret' -e 'environment-secret' \
   exit 1
 fi
 
+printf '%s\n' '#!/usr/bin/env bash' \
+  'set -euo pipefail' \
+  '[[ "$PWD" == "$WP_EXPECTED_ROOT" ]]' \
+  '[[ " $* " != *" --path="* ]]' \
+  '[[ " $* " == *" search-replace "* ]]' \
+  'printf '\''%s\n'\'' "$*" > "$WP_REWRITE_MARKER"' > "$FAKE_BIN/wp"
+chmod +x "$FAKE_BIN/wp"
+export WP_EXPECTED_ROOT="$TARGET"
+export WP_REWRITE_MARKER="$TEST_ROOT/wp-rewrite"
+PATH="$FAKE_BIN:$PATH" bash -c '
+  set -euo pipefail
+  source "$1/lib/util.sh"
+  source "$1/lib/wp-cli.sh"
+  DRY_RUN=0
+  ASSUME_YES=1
+  REPORT_FILE="$2/report"
+  wpcli_search_replace "$2/target" https://old.example.test https://new.example.test
+' bash "$ROOT_DIR" "$TEST_ROOT"
+grep -q 'https://old.example.test https://new.example.test' "$WP_REWRITE_MARKER"
+
 printf 'native database smoke test passed\n'

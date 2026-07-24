@@ -654,6 +654,7 @@ wp-load.php
 ```
 
 That is expected. The migrator targets `/srv/htdocs` for site files and does not require local `wp-admin` or `wp-includes` directories in the document root.
+Destination WP-CLI commands are launched from inside the target root rather than with `--path`; this supports hosting wrappers that resolve a shared WordPress core from the shell's working directory.
 
 Before a restore, run:
 

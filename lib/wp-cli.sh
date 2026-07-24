@@ -9,7 +9,7 @@ wpcli_import_db() {
   [[ -f "$sql_file" ]] || die "SQL file not found: $sql_file"
 
   if [[ "${DRY_RUN:-0}" -eq 1 ]]; then
-    log "Would import database: wp --path=$target_root db import $sql_file"
+    log "Would import database from $target_root: wp db import $sql_file"
     return 0
   fi
 
@@ -21,7 +21,7 @@ wpcli_import_db() {
   if [[ "$skip_backup" -ne 1 ]]; then
     backup="$target_root/db-backup-before-import-$(date +%Y%m%d%H%M%S).sql"
     log "Backing up current database to $backup"
-    if [[ "$method" != "native" && "$wp_available" -eq 1 ]] && wp --path="$target_root" --skip-plugins --skip-themes db export "$backup"; then
+    if [[ "$method" != "native" && "$wp_available" -eq 1 ]] && wp_in_root "$target_root" --skip-plugins --skip-themes db export "$backup"; then
       chmod 600 "$backup"
     elif [[ "$method" == "wp-cli" ]]; then
       die "WP-CLI target database backup failed"
@@ -33,7 +33,7 @@ wpcli_import_db() {
   fi
 
   log "Importing database"
-  if [[ "$method" != "native" && "$wp_available" -eq 1 ]] && wp --path="$target_root" --skip-plugins --skip-themes db import "$sql_file"; then
+  if [[ "$method" != "native" && "$wp_available" -eq 1 ]] && wp_in_root "$target_root" --skip-plugins --skip-themes db import "$sql_file"; then
     report "Target database method: wp-cli"
   elif [[ "$method" == "wp-cli" ]]; then
     die "WP-CLI target database import failed"
@@ -70,7 +70,7 @@ wpcli_maybe_import_db() {
     ask)
       if [[ "${DRY_RUN:-0}" -eq 1 ]]; then
         log "Would ask whether to import the combined SQL into the target database; default answer is yes"
-        log "Would import database: wp --path=$target_root db import $sql_file"
+        log "Would import database from $target_root: wp db import $sql_file"
         if [[ "$delete_sql_after_import" -eq 1 ]]; then
           log "Would delete combined SQL after successful import: $sql_file"
         fi
@@ -95,18 +95,18 @@ wpcli_search_replace() {
 
   if ! command -v wp >/dev/null 2>&1; then
     warn "WP-CLI is unavailable; URL rewrite is pending"
-    warn "Run later: wp --path=$target_root search-replace '$old_url' '$new_url' --all-tables-with-prefix --precise --recurse-objects --skip-columns=guid"
+    warn "Run later: cd '$target_root' && wp search-replace '$old_url' '$new_url' --all-tables-with-prefix --precise --recurse-objects --skip-columns=guid"
     report "URL rewrite pending: WP-CLI unavailable"
     return 0
   fi
 
   if [[ "${DRY_RUN:-0}" -eq 1 ]]; then
-    wp --path="$target_root" search-replace "$old_url" "$new_url" --all-tables-with-prefix --precise --recurse-objects --skip-columns=guid --dry-run
+    wp_in_root "$target_root" search-replace "$old_url" "$new_url" --all-tables-with-prefix --precise --recurse-objects --skip-columns=guid --dry-run
     return 0
   fi
 
   confirm "Run serialized-safe search-replace from $old_url to $new_url?" || die "Search-replace cancelled"
-  if ! wp --path="$target_root" search-replace "$old_url" "$new_url" --all-tables-with-prefix --precise --recurse-objects --skip-columns=guid; then
+  if ! wp_in_root "$target_root" search-replace "$old_url" "$new_url" --all-tables-with-prefix --precise --recurse-objects --skip-columns=guid; then
     warn "WP-CLI search-replace failed; URL rewrite is pending"
     report "URL rewrite pending: WP-CLI command failed"
     return 0
