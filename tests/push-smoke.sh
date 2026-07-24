@@ -19,8 +19,8 @@ printf '%s\n' '#!/usr/bin/env bash' \
   'case "$command_text" in' \
   '  true) exit 0 ;;' \
   '  *"__MB_TARGET_ROOT__"*) printf '\''__MB_TARGET_ROOT__=/srv/htdocs\n'\'' ;;' \
+  '  *"option"*get*siteurl*) printf '\''%s\n'\'' "$command_text" > "$PUSH_URL_MARKER"; printf '\''https://destination-push.example.test\n'\'' ;;' \
   '  *"option"*get*home*) exit 1 ;;' \
-  '  *"option"*get*siteurl*) printf '\''https://destination-push.example.test\n'\'' ;;' \
   '  *"__MB_REMOTE_DIR__"*) printf '\''__MB_REMOTE_DIR__=/home/destination/.local/state/mb-migrator/incoming/push.test123\n'\'' ;;' \
   '  *"rm -f"*) printf '\''%s\n'\'' "$command_text" > "$PUSH_CLEANUP_MARKER" ;;' \
   '  *"remote-run.sh"*) printf '\''%s\n'\'' "$command_text" > "$PUSH_IMPORT_MARKER" ;;' \
@@ -58,6 +58,7 @@ export DB_HOST="localhost"
 export PUSH_IMPORT_MARKER="$TEST_ROOT/import-command"
 export PUSH_CLEANUP_MARKER="$TEST_ROOT/cleanup-command"
 export PUSH_SCP_MARKER="$TEST_ROOT/scp-command"
+export PUSH_URL_MARKER="$TEST_ROOT/url-command"
 export MB_MIGRATOR_SSH_DIR="$TEST_ROOT/ssh"
 
 prepare_output="$(PATH="$FAKE_BIN:$PATH" "$ROOT_DIR/bin/mb-migrator" push-pair prepare "--state-dir=$STATE_DIR")"
@@ -86,9 +87,12 @@ PATH="$FAKE_BIN:$PATH" "$ROOT_DIR/bin/mb-migrator" push-site \
   --yes
 
 test -s "$PUSH_SCP_MARKER"
+test -s "$PUSH_URL_MARKER"
 test -s "$PUSH_IMPORT_MARKER"
 test -s "$PUSH_CLEANUP_MARKER"
 grep -q 'import-site' "$PUSH_IMPORT_MARKER"
+grep -q 'cd' "$PUSH_URL_MARKER"
+grep -q 'siteurl' "$PUSH_URL_MARKER"
 grep -q -- '--target-root=/srv/htdocs' "$PUSH_IMPORT_MARKER"
 grep -q -- '--new-url=https://destination-push.example.test' "$PUSH_IMPORT_MARKER"
 
