@@ -29,7 +29,7 @@ printf '%s\n' '#!/usr/bin/env bash' \
   'set -euo pipefail' \
   'cnf="${1#--defaults-extra-file=}"' \
   'grep -q '\''password="package-secret"'\'' "$cnf"' \
-  'printf '\''/*!40014 SET @OLD_FOREIGN_KEY_CHECKS=@@FOREIGN_KEY_CHECKS, FOREIGN_KEY_CHECKS=0 */;\nDROP TABLE IF EXISTS `wp_options`;\nCREATE TABLE `wp_options` (`option_id` bigint);\nINSERT INTO `wp_options` VALUES (1);\n/*!40014 SET FOREIGN_KEY_CHECKS=@OLD_FOREIGN_KEY_CHECKS */;\n'\''' > "$FAKE_BIN/mariadb-dump"
+  'printf '\''/*!40014 SET @OLD_FOREIGN_KEY_CHECKS=@@FOREIGN_KEY_CHECKS, FOREIGN_KEY_CHECKS=0 */;\nDROP TABLE IF EXISTS `wp_options`;\nCREATE TABLE `wp_options` (`option_id` bigint);\nINSERT INTO `wp_options` VALUES (1);\n/*!50001 CREATE ALGORITHM=UNDEFINED */\n/*!50013 DEFINER=`source-user`@`%%` SQL SECURITY DEFINER */\n/*!50001 VIEW `wp_test_view` AS select 1 AS `value` */;\nCREATE DEFINER='\''source-user'\''@'\''source-host'\'' PROCEDURE `wp_test_proc`() SELECT 1;\n/*!40014 SET FOREIGN_KEY_CHECKS=@OLD_FOREIGN_KEY_CHECKS */;\n'\''' > "$FAKE_BIN/mariadb-dump"
 printf '%s\n' '#!/usr/bin/env bash' \
   'set -euo pipefail' \
   'printf '\''https://source.example.test\n'\''' > "$FAKE_BIN/mariadb"
@@ -94,6 +94,13 @@ test -f "$TARGET/wp-content/uploads/2026/07/package.txt"
 test -f "$TARGET/verification.html"
 grep -R -q 'Source URL read from package manifest: https://source.example.test' "$TARGET"/restore-*/migration-report.txt
 grep -R -q 'URL rewrite pending' "$TARGET"/restore-*/migration-report.txt
+COMBINED_SQL="$(find "$TARGET" -name '*-combined-phpmyadmin-import.sql' -print -quit)"
+test -n "$COMBINED_SQL"
+if grep -Eqi '\bDEFINER[[:space:]]*=' "$COMBINED_SQL"; then
+  printf 'combined SQL unexpectedly retained a source DEFINER clause\n' >&2
+  exit 1
+fi
+grep -q 'SQL SECURITY DEFINER' "$COMBINED_SQL"
 
 STAGED_PACKAGE="$TEST_ROOT/staged-package"
 mkdir -p "$STAGED_PACKAGE"

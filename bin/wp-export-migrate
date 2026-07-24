@@ -15,6 +15,7 @@ source "$ROOT_DIR/lib/wp-cli.sh"
 source "$ROOT_DIR/providers/gridpane.sh"
 source "$ROOT_DIR/providers/legacy-mightybox.sh"
 source "$ROOT_DIR/providers/wordpress-package.sh"
+set_log_context restore setup
 
 COMMAND="${1:-}"
 if [[ -n "$COMMAND" ]]; then
@@ -74,6 +75,7 @@ if [[ "$COMMAND" == "--help" || "$COMMAND" == "-h" || -z "$COMMAND" ]]; then
 fi
 
 if [[ "$COMMAND" == "doctor" ]]; then
+  set_log_context doctor setup
   TARGET_ROOT=""
   ARCHIVE=""
   IMPORT_DB=0
@@ -99,7 +101,9 @@ if [[ "$COMMAND" == "doctor" ]]; then
     ARCHIVE="$(abs_path "$ARCHIVE")"
   fi
   case "$TARGET_DB_METHOD" in auto|wp-cli|native) ;; *) die "--target-db-method must be auto, wp-cli, or native" ;; esac
+  set_log_phase preflight
   preflight_environment "$TARGET_ROOT" "$ARCHIVE" "$IMPORT_DB" "$SEARCH_REPLACE" "$TARGET_DB_METHOD"
+  set_log_phase complete
   log "Doctor completed"
   exit 0
 fi
@@ -235,12 +239,14 @@ log "Stage dir: $STAGE_DIR"
 report "Target root: $TARGET_ROOT"
 report "Stage dir: $STAGE_DIR"
 
+set_log_phase preflight
 if [[ "$SOURCE_IS_DIRECTORY" -eq 1 ]]; then
   preflight_environment "$TARGET_ROOT" "" "$IMPORT_DB" "$SEARCH_REPLACE" "$TARGET_DB_METHOD"
 else
   preflight_environment "$TARGET_ROOT" "$ARCHIVE" "$IMPORT_DB" "$SEARCH_REPLACE" "$TARGET_DB_METHOD"
 fi
 
+set_log_phase inspect
 if [[ "$SOURCE_IS_DIRECTORY" -eq 1 ]]; then
   ARCHIVE_INDEX="$STAGE_DIR/.archive-index.txt"
   log "Indexing staged package contents"
@@ -322,9 +328,11 @@ if [[ -z "$DB_OUTPUT" ]]; then
   DB_OUTPUT="$STAGE_DIR/${archive_base}-combined-phpmyadmin-import.sql"
 fi
 
+set_log_phase database
 combine_database_sql "$STAGE_DIR/$PROVIDER_DB_DIR" "$DB_OUTPUT"
 verify_database_sql "$DB_OUTPUT"
 
+set_log_phase files
 merge_wp_content "$STAGE_DIR/$PROVIDER_WEB_ROOT/wp-content" "$TARGET_ROOT/wp-content"
 copy_web_root_files "$STAGE_DIR/$PROVIDER_WEB_ROOT" "$TARGET_ROOT" "${PROVIDER_ROOT_EXTRA_FILES[@]}"
 SOURCE_WP_CONFIG=""
@@ -335,6 +343,7 @@ fi
 if [[ -n "${PROVIDER_USER_CONFIGS_PATH:-}" ]]; then
   SOURCE_USER_CONFIGS="$STAGE_DIR/$PROVIDER_USER_CONFIGS_PATH"
 fi
+set_log_phase config
 wp_config_report "$SOURCE_WP_CONFIG" "$TARGET_ROOT/wp-config.php" "$STAGE_DIR"
 wp_config_report_named "user-configs.php" "$SOURCE_USER_CONFIGS" "$TARGET_ROOT/user-configs.php" "$STAGE_DIR" "user-configs"
 
@@ -345,9 +354,11 @@ if [[ "$MIGRATE_CONFIG" -eq 1 ]]; then
   fi
 fi
 
+set_log_phase database
 wpcli_maybe_import_db "$TARGET_ROOT" "$DB_OUTPUT" "$SKIP_DB_BACKUP" "$DB_IMPORT_MODE" 0
 
 if [[ "$SEARCH_REPLACE" -eq 1 ]]; then
+  set_log_phase rewrite
   [[ -n "$OLD_URL" && -n "$NEW_URL" ]] || die "--search-replace requires --old-url and --new-url"
   wpcli_search_replace "$TARGET_ROOT" "$OLD_URL" "$NEW_URL"
 fi
@@ -411,6 +422,7 @@ cleanup_run() {
   CLEANUP_RAN=1
 }
 
+set_log_phase cleanup
 if [[ "$CLEANUP_MODE" != "no" ]]; then
   if [[ "$DRY_RUN" -eq 1 ]]; then
     cleanup_show_plan
@@ -437,6 +449,7 @@ else
   report "Cleanup disabled"
 fi
 
+set_log_phase complete
 log "Done"
 if [[ "$CLEANUP_RAN" -eq 1 ]]; then
   log "Staging directory deleted: $STAGE_DIR"

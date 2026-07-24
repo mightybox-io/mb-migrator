@@ -5,6 +5,7 @@ umask 077
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 source "$ROOT_DIR/lib/util.sh"
+set_log_context package setup
 
 usage() {
   cat <<'EOF'
@@ -78,6 +79,7 @@ collect_files_with_progress() {
 export_site() (
   local source_root="" output="" db_method="auto"
   local work output_tmp checksum_tmp source_url package_stage
+  set_log_context export setup
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -108,6 +110,7 @@ export_site() (
   need_cmd tar
   need_cmd wc
   need_cmd tr
+  set_log_context export preflight
   work="$(mktemp -d "${TMPDIR:-/tmp}/mb-wordpress-package.XXXXXX")"
   output_tmp="$output.tmp.$$"
   checksum_tmp="$output.sha256.tmp.$$"
@@ -124,11 +127,13 @@ export_site() (
   log "Preflighting WordPress source"
   bash "$ROOT_DIR/lib/remote-source.sh" preflight "$source_root" "$db_method"
 
+  set_log_phase files
   log "Collecting WordPress files"
   collect_files_with_progress "$source_root" "$db_method" "$work/files.tar.gz"
   tar -tzf "$work/files.tar.gz" >/dev/null
   tar -xzf "$work/files.tar.gz" -C "$package_stage/htdocs"
 
+  set_log_phase database
   log "Exporting WordPress database"
   bash "$ROOT_DIR/lib/remote-source.sh" export-db "$source_root" "$db_method" > "$package_stage/database-package/site.sql"
   [[ -s "$package_stage/database-package/site.sql" ]] || die "Database export was empty"
@@ -143,6 +148,7 @@ export_site() (
   } > "$package_stage/mb-wordpress-package-manifest"
 
   chmod 600 "$package_stage/database-package/site.sql" "$package_stage/mb-wordpress-package-manifest"
+  set_log_phase package
   log "Building portable package"
   tar -czf "$output_tmp" -C "$package_stage" mb-wordpress-package-manifest database-package htdocs
   tar -tzf "$output_tmp" >/dev/null
@@ -151,6 +157,7 @@ export_site() (
   mv "$output_tmp" "$output"
   mv "$checksum_tmp" "$output.sha256"
 
+  set_log_phase complete
   log "Package created: $output"
   log "Checksum: $output.sha256"
   if [[ -n "$source_url" ]]; then
@@ -162,6 +169,7 @@ export_site() (
 
 import_site() {
   local package="${1:-}" expected actual
+  set_log_context import verify
   if [[ "$package" == "--help" || "$package" == "-h" ]]; then
     usage
     return 0
@@ -185,6 +193,7 @@ import_site() {
 
 import_staged() {
   local package_dir="${1:-}"
+  set_log_context import verify
   if [[ "$package_dir" == "--help" || "$package_dir" == "-h" ]]; then
     usage
     return 0

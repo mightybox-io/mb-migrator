@@ -1,15 +1,31 @@
 #!/usr/bin/env bash
 
+MB_LOG_WORKFLOW="${MB_LOG_WORKFLOW:-migration}"
+MB_LOG_PHASE="${MB_LOG_PHASE:-setup}"
+
+set_log_context() {
+  MB_LOG_WORKFLOW="$1"
+  MB_LOG_PHASE="${2:-setup}"
+}
+
+set_log_phase() {
+  MB_LOG_PHASE="$1"
+}
+
+log_prefix() {
+  printf '%s:%s' "$MB_LOG_WORKFLOW" "$MB_LOG_PHASE"
+}
+
 log() {
-  printf '[importer] %s\n' "$*"
+  printf '[%s] %s\n' "$(log_prefix)" "$*"
 }
 
 warn() {
-  printf '[importer:warn] %s\n' "$*" >&2
+  printf '[%s:warn] %s\n' "$(log_prefix)" "$*" >&2
 }
 
 die() {
-  printf '[importer:error] %s\n' "$*" >&2
+  printf '[%s:error] %s\n' "$(log_prefix)" "$*" >&2
   exit 1
 }
 
@@ -50,8 +66,8 @@ confirm() {
     log "$prompt yes"
     return 0
   fi
-  printf '[importer:prompt] %s\n' "$prompt" >&2
-  printf '[importer:prompt] Answer [y/N]: ' >&2
+  printf '[%s:prompt] %s\n' "$(log_prefix)" "$prompt" >&2
+  printf '[%s:prompt] Answer [y/N]: ' "$(log_prefix)" >&2
   read -r answer
   case "$answer" in
     y|Y|yes|YES) return 0 ;;
@@ -65,8 +81,8 @@ confirm_default_yes() {
     log "$prompt yes"
     return 0
   fi
-  printf '[importer:prompt] %s\n' "$prompt" >&2
-  printf '[importer:prompt] Answer [Y/n]: ' >&2
+  printf '[%s:prompt] %s\n' "$(log_prefix)" "$prompt" >&2
+  printf '[%s:prompt] Answer [Y/n]: ' "$(log_prefix)" >&2
   read -r answer
   case "$answer" in
     n|N|no|NO) return 1 ;;

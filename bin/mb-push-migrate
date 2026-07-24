@@ -5,6 +5,7 @@ umask 077
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 source "$ROOT_DIR/lib/util.sh"
+set_log_context push setup
 
 usage() {
   cat <<'EOF'
@@ -67,6 +68,7 @@ pairing_dir() {
 prepare_pairing() (
   local state_dir pairing_root pending key_file pairing_id final_dir public_key
   state_dir="$(default_state_dir)"
+  set_log_context pairing key
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --state-dir=*) state_dir="${1#*=}" ;;
@@ -105,6 +107,7 @@ complete_pairing() {
   local pairing_id="${1:-}" destination="${2:-}" state_dir port pair_dir key_file ssh_dir
   local host host_lookup strict_policy scan_file
   [[ -n "$pairing_id" && -n "$destination" ]] || die "push-pair complete requires PAIRING_ID and USER@HOST"
+  set_log_context pairing connect
   shift 2
   state_dir="$(default_state_dir)"
   port=22
@@ -192,6 +195,7 @@ push_site() (
   local -a restore_args ssh_args scp_args rsync_args
 
   state_dir="$(default_state_dir)"
+  set_log_context push setup
   restore_args=()
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -229,9 +233,11 @@ push_site() (
   need_cmd ssh
   ssh_args=(-p "$port" -i "$key_file" -o BatchMode=yes -o IdentitiesOnly=yes -o "UserKnownHostsFile=$ssh_dir/known_hosts")
   scp_args=(-P "$port" -i "$key_file" -o BatchMode=yes -o IdentitiesOnly=yes -o "UserKnownHostsFile=$ssh_dir/known_hosts")
+  set_log_phase connect
   log "Verifying saved SSH pairing"
   ssh "${ssh_args[@]}" "$destination" true || die "Saved SSH pairing could not connect"
 
+  set_log_phase discovery
   if [[ -z "$target_root" ]]; then
     remote_output="$(ssh "${ssh_args[@]}" "$destination" \
       'target=""; if [ -d /srv/htdocs ] && [ -f /srv/htdocs/wp-config.php ]; then target=/srv/htdocs; elif [ -d "$HOME/htdocs" ] && [ -f "$HOME/htdocs/wp-config.php" ]; then target="$(readlink -f "$HOME/htdocs" 2>/dev/null || printf "%s" "$HOME/htdocs")"; fi; printf "__MB_TARGET_ROOT__=%s\n" "$target"')"
@@ -263,6 +269,7 @@ push_site() (
     log "Detected destination URL: $new_url"
   fi
 
+  set_log_phase transport
   selected_transport="$transport"
   if [[ "$selected_transport" == "auto" ]]; then
     if command -v rsync >/dev/null 2>&1; then
@@ -286,6 +293,7 @@ push_site() (
   work="$(mktemp -d "${MB_MIGRATOR_TMPDIR:-${TMPDIR:-/tmp}}/mb-push-site.XXXXXX")"
   trap 'rm -rf "$work"' EXIT
 
+  set_log_phase transfer
   log "Creating private incoming directory on destination"
   remote_output="$(ssh "${ssh_args[@]}" "$destination" \
     'umask 077; incoming="$HOME/.local/state/mb-migrator/incoming"; mkdir -p "$incoming"; chmod 700 "$HOME/.local/state" "$HOME/.local/state/mb-migrator" "$incoming" 2>/dev/null || true; dir="$(mktemp -d "$incoming/push.XXXXXX")"; printf "__MB_REMOTE_DIR__=%s\n" "$dir"')"
@@ -304,6 +312,7 @@ push_site() (
   need_cmd scp
   if [[ "$selected_transport" == "rsync" ]]; then
     log "Transport: direct rsync over SSH"
+    set_log_phase preflight
     log "Preflighting WordPress source"
     bash "$ROOT_DIR/lib/remote-source.sh" preflight "$source_root" "$source_db_method"
 
@@ -320,6 +329,7 @@ push_site() (
       rsync_args+=(--progress)
     fi
 
+    set_log_phase files
     log "Rsync pass 1 of 2: WordPress files"
     run_live_rsync "${rsync_args[@]}" -e "$ssh_transport" \
       "$source_root/wp-content/" "$destination:$remote_stage/htdocs/wp-content/"
@@ -346,6 +356,7 @@ push_site() (
       --exclude='wp-config.php' \
       "$source_root/" "$destination:$remote_stage/htdocs/"
 
+    set_log_phase database
     log "Streaming fresh database export to destination"
     bash "$ROOT_DIR/lib/remote-source.sh" export-db "$source_root" "$source_db_method" |
       ssh "${ssh_args[@]}" "$destination" \
@@ -362,6 +373,7 @@ push_site() (
     } > "$work/mb-wordpress-package-manifest"
     chmod 600 "$work/mb-wordpress-package-manifest"
 
+    set_log_phase transfer
     log "Transferring migration metadata and runner"
     scp "${scp_args[@]}" "$work/mb-wordpress-package-manifest" \
       "$destination:$remote_stage/mb-wordpress-package-manifest"
@@ -371,6 +383,7 @@ push_site() (
     append_shell_arg import_command import-staged
     append_shell_arg import_command "$remote_stage"
   else
+    set_log_phase package
     log "Transport: portable package over SSH"
     package="$work/wordpress-package.tar.gz"
     "$ROOT_DIR/bin/mb-package" export-site \
@@ -387,6 +400,7 @@ push_site() (
   for arg in "${restore_args[@]}"; do append_shell_arg import_command "$arg"; done
   printf -v remote_command 'bash -lc %q' "$import_command"
 
+  set_log_phase restore
   log "Starting destination import"
   if [[ -t 0 && -t 1 ]]; then
     ssh -t "${ssh_args[@]}" "$destination" "$remote_command" || {
@@ -398,10 +412,12 @@ push_site() (
     exit 1
   fi
 
+  set_log_phase cleanup
   printf -v cleanup_command 'rm -f %q %q %q; rmdir %q 2>/dev/null || true' \
     "$remote_package" "$remote_package.sha256" "$remote_runner" "$remote_dir"
   ssh "${ssh_args[@]}" "$destination" "$cleanup_command" ||
     warn "Migration succeeded, but destination runner cleanup failed: $remote_dir"
+  set_log_phase complete
   log "Push migration completed"
 )
 

@@ -32,6 +32,7 @@ my %stats = (
   removed_use => 0,
   removed_source_fk => 0,
   removed_source_drop => 0,
+  removed_definers => 0,
   drops_inserted => 0,
   creates_seen => 0,
 );
@@ -59,6 +60,14 @@ sub append_file {
       $stats{removed_source_drop}++;
       next;
     }
+    my $definers = ($line =~ s{
+      \bDEFINER\s*=\s*
+      (?:`[^`]*`|'[^']*'|"[^"]*"|[A-Za-z0-9_.%:+-]+)
+      \s*\@\s*
+      (?:`[^`]*`|'[^']*'|"[^"]*"|[A-Za-z0-9_.%:+-]+)
+      \s*
+    }{}igx);
+    $stats{removed_definers} += $definers;
     if ($line =~ /^\s*CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?((?:`[^`]+`\.)?`[^`]+`|[^\s(]+)/i) {
       $stats{creates_seen}++;
       if ($is_schema) {
@@ -85,6 +94,7 @@ print "removed_create_database_lines=$stats{removed_create_database}\n";
 print "removed_use_lines=$stats{removed_use}\n";
 print "removed_source_fk_lines=$stats{removed_source_fk}\n";
 print "removed_source_drop_lines=$stats{removed_source_drop}\n";
+print "removed_definer_clauses=$stats{removed_definers}\n";
 PERL
 }
 
@@ -102,6 +112,7 @@ verify_database_sql() {
     $use++ if /^\s*USE\s+/i;
     $fk0++ if /FOREIGN_KEY_CHECKS\s*=\s*0/i;
     $fk1++ if /FOREIGN_KEY_CHECKS\s*=\s*1/i;
+    $definer++ if /\bDEFINER\s*=/i;
     END {
       print "bad_unquoted_timezone=" . ($bad_tz||0) . "\n";
       print "create_tables=" . ($create||0) . "\n";
@@ -110,13 +121,14 @@ verify_database_sql() {
       print "use_statements=" . ($use||0) . "\n";
       print "foreign_key_disable_statements=" . ($fk0||0) . "\n";
       print "foreign_key_enable_statements=" . ($fk1||0) . "\n";
+      print "definer_clauses=" . ($definer||0) . "\n";
     }
   ' "$outfile")"
   printf '%s\n' "$output"
   report "SQL verification:"
   printf '%s\n' "$output" >> "$REPORT_FILE"
 
-  local create drop createdb use fk0 fk1 bad_tz
+  local create drop createdb use fk0 fk1 bad_tz definer
   create="$(printf '%s\n' "$output" | awk -F= '/^create_tables=/{print $2}')"
   drop="$(printf '%s\n' "$output" | awk -F= '/^drop_tables=/{print $2}')"
   createdb="$(printf '%s\n' "$output" | awk -F= '/^create_database_statements=/{print $2}')"
@@ -124,10 +136,12 @@ verify_database_sql() {
   fk0="$(printf '%s\n' "$output" | awk -F= '/^foreign_key_disable_statements=/{print $2}')"
   fk1="$(printf '%s\n' "$output" | awk -F= '/^foreign_key_enable_statements=/{print $2}')"
   bad_tz="$(printf '%s\n' "$output" | awk -F= '/^bad_unquoted_timezone=/{print $2}')"
+  definer="$(printf '%s\n' "$output" | awk -F= '/^definer_clauses=/{print $2}')"
 
   [[ "$create" == "$drop" ]] || die "DROP/CREATE mismatch: $drop drops vs $create creates"
   [[ "$createdb" == "0" ]] || die "CREATE DATABASE remains in output"
   [[ "$use" == "0" ]] || die "USE statement remains in output"
   [[ "$fk0" == "1" && "$fk1" == "1" ]] || die "Unexpected FK check counts: disable=$fk0 enable=$fk1"
   [[ "$bad_tz" == "0" ]] || die "Unquoted TIME_ZONE statement remains in output"
+  [[ "$definer" == "0" ]] || die "Source DEFINER clauses remain in output"
 }

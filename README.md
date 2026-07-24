@@ -352,6 +352,7 @@ The combined SQL file is suitable for phpMyAdmin or `wp db import`:
 - `CREATE DATABASE` statements are removed.
 - `USE database_name` statements are removed.
 - Source `FOREIGN_KEY_CHECKS` statements are removed.
+- Source-account `DEFINER=user@host` clauses are removed from views, routines, triggers, and events so imports do not require destination `SET USER` privileges. `SQL SECURITY DEFINER` behavior is preserved.
 - One `FOREIGN_KEY_CHECKS=0` statement is written at the top.
 - One `FOREIGN_KEY_CHECKS=1` statement is written at the end.
 - `SET time_zone = '+00:00';` is written using normal quoted SQL syntax.
@@ -362,7 +363,12 @@ The verifier fails the run if:
 - Any `CREATE DATABASE` statement remains.
 - Any `USE` statement remains.
 - Foreign key checks are not disabled/enabled exactly once.
+- Any source `DEFINER=` clause remains.
 - An unquoted `TIME_ZONE=+00:00` style statement remains.
+
+## Progress Labels
+
+Console messages use workflow and phase labels instead of a generic importer prefix. Examples include `[push:connect]`, `[push:files]`, `[push:database]`, `[restore:inspect]`, and `[restore:cleanup]`. Warnings, errors, and prompts keep the active phase, such as `[restore:database:error]`, so failures identify where they occurred.
 
 ## File Restore Behavior
 

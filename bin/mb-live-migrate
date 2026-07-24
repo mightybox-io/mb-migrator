@@ -5,6 +5,7 @@ umask 077
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 source "$ROOT_DIR/lib/util.sh"
+set_log_context live setup
 
 usage() {
   cat <<'EOF'
@@ -64,6 +65,7 @@ ssh_remote() {
 }
 
 pair_command() {
+  set_log_context pairing setup
   SSH_SOURCE="${1:-}"; shift || true
   [[ -n "$SSH_SOURCE" ]] || die "pair requires USER@HOST"
   validate_source "$SSH_SOURCE"
@@ -96,6 +98,7 @@ pair_command() {
     chmod 644 "$IDENTITY_FILE.pub"
   fi
   make_ssh_args
+  set_log_phase connect
   if ssh "${SSH_ARGS[@]}" -o BatchMode=yes "$SSH_SOURCE" true >/dev/null 2>&1; then
     log "SSH pairing verified"
     return 0
@@ -111,6 +114,7 @@ pair_command() {
 }
 
 doctor_command() {
+  set_log_context doctor setup
   SSH_SOURCE=""; SOURCE_ROOT="/var/www/webroot/ROOT"; TARGET_ROOT=""; SSH_PORT=22
   IDENTITY_FILE=""; SOURCE_DB_METHOD="auto"; TARGET_DB_METHOD="auto"; STATE_DIR="$(default_state_dir)"
   while [[ $# -gt 0 ]]; do
@@ -134,13 +138,17 @@ doctor_command() {
   if [[ -z "$IDENTITY_FILE" ]]; then IDENTITY_FILE="$STATE_DIR/keys/$(hash_text "$SSH_SOURCE:$SSH_PORT" | cut -c1-20)"; fi
   [[ -f "$IDENTITY_FILE" ]] || die "SSH key not found. Run: mb-migrator pair $SSH_SOURCE --port=$SSH_PORT"
   make_ssh_args
+  set_log_phase connect
   ssh "${SSH_ARGS[@]}" -o BatchMode=yes "$SSH_SOURCE" true >/dev/null || die "SSH connection failed"
+  set_log_phase preflight
   ssh_remote preflight "$SOURCE_ROOT" "$SOURCE_DB_METHOD"
   "$ROOT_DIR/bin/wp-export-migrate" doctor --target-root="$TARGET_ROOT" --import-db --target-db-method="$TARGET_DB_METHOD"
+  set_log_phase complete
   log "Live migration doctor completed"
 }
 
 pull_command() {
+  set_log_context pull setup
   SSH_SOURCE="${1:-}"; shift || true
   [[ -n "$SSH_SOURCE" ]] || die "pull requires USER@HOST"
   validate_source "$SSH_SOURCE"
@@ -191,6 +199,7 @@ pull_command() {
   [[ -f "$IDENTITY_FILE" ]] || die "SSH key not found. Run: mb-migrator pair $SSH_SOURCE --port=$SSH_PORT"
   make_ssh_args
 
+  set_log_phase preflight
   if [[ "$DB_IMPORT_MODE" != "no" ]]; then
     log "Preflighting target database access"
     "$ROOT_DIR/bin/wp-export-migrate" doctor --target-root="$TARGET_ROOT" --import-db --target-db-method="$TARGET_DB_METHOD"
@@ -200,7 +209,8 @@ pull_command() {
 
   if [[ -d "$migration_dir" && "$CONTINUE_EXISTING" -eq 0 && "$RESTART" -eq 0 ]]; then
     if [[ ! -t 0 ]]; then die "Existing migration detected; use --continue-existing or --restart"; fi
-    printf '[importer:prompt] Existing migration %s found at %s. [C]ontinue catch-up, [r]estart, or [q]uit? ' "$migration_id" "$migration_dir" >&2
+    printf '[%s:prompt] Existing migration %s found at %s. [C]ontinue catch-up, [r]estart, or [q]uit? ' \
+      "$(log_prefix)" "$migration_id" "$migration_dir" >&2
     read -r choice
     case "$choice" in r|R|restart) RESTART=1 ;; q|Q|quit) die "Migration cancelled" ;; *) CONTINUE_EXISTING=1 ;; esac
   fi
@@ -235,6 +245,7 @@ pull_command() {
   trap 'rm -rf "$run_tmp"' EXIT
   mkdir -p "$run_tmp/htdocs" "$run_tmp/database-legacy"
 
+  set_log_phase files
   if command -v rsync >/dev/null 2>&1 && ssh "${SSH_ARGS[@]}" "$SSH_SOURCE" command -v rsync >/dev/null 2>&1; then
     log "Transferring new and changed wp-content files with rsync"
     mkdir -p "$migration_dir/work/htdocs/wp-content"
@@ -249,10 +260,12 @@ pull_command() {
     tar -xzf "$run_tmp/files.tar.gz" -C "$migration_dir/work/htdocs"
   fi
 
+  set_log_phase database
   log "Exporting a fresh source database"
   ssh_remote export-db "$SOURCE_ROOT" "$SOURCE_DB_METHOD" > "$run_tmp/database-legacy/site.sql"
   [[ -s "$run_tmp/database-legacy/site.sql" ]] || die "Source database export was empty"
   cp -R "$migration_dir/work/htdocs/." "$run_tmp/htdocs/"
+  set_log_phase package
   printf 'format=legacy-mightybox-v1\nsource=%s\nsource_root=%s\ntarget_root=%s\ncreated_utc=%s\n' \
     "$SSH_SOURCE" "$SOURCE_ROOT" "$(abs_path "$TARGET_ROOT")" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$run_tmp/mb-migrator-manifest"
   chmod 600 "$run_tmp/database-legacy/site.sql" "$run_tmp/mb-migrator-manifest"
@@ -276,13 +289,16 @@ pull_command() {
   cp "$snapshot" "$run_tmp/restore-snapshot.tar.gz"
   chmod 600 "$run_tmp/restore-snapshot.tar.gz"
   live_stage="$TARGET_ROOT/restore-live-${migration_id}-$(date +%Y%m%d%H%M%S)-$$"
+  set_log_phase restore
   "$ROOT_DIR/bin/wp-export-migrate" restore "$run_tmp/restore-snapshot.tar.gz" --provider=legacy-mightybox --target-root="$TARGET_ROOT" --stage-dir="$live_stage" "${RESTORE_ARGS[@]}"
   [[ -z "$OLD_URL" ]] || { printf '%s\n' "$OLD_URL" > "$migration_dir/old-url"; chmod 600 "$migration_dir/old-url"; }
   [[ -z "$NEW_URL" ]] || { printf '%s\n' "$NEW_URL" > "$migration_dir/new-url"; chmod 600 "$migration_dir/new-url"; }
   if [[ "$SNAPSHOT_MODE" == "delete" ]]; then
+    set_log_phase cleanup
     rm -f "$snapshot" "$snapshot.sha256" "$migration_dir/latest-snapshot"
     log "Deleted snapshot after successful restore: $snapshot"
   fi
+  set_log_phase complete
   log "Migration ID: $migration_id"
   log "Catch up by rerunning this pull command with --continue-existing"
 }
