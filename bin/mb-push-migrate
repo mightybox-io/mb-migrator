@@ -1,0 +1,249 @@
+#!/usr/bin/env bash
+set -euo pipefail
+umask 077
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+source "$ROOT_DIR/lib/util.sh"
+
+usage() {
+  cat <<'EOF'
+Outbound SSH push migration commands:
+
+  mb-migrator push-pair prepare [--state-dir=PATH]
+  mb-migrator push-pair complete PAIRING_ID USER@HOST [--port=22]
+  mb-migrator push-site --pairing=PAIRING_ID --source-root=PATH \
+    --target-root=PATH [restore options]
+
+The private pairing key remains on the source host. Install only the public key
+printed by `push-pair prepare` on the destination SSH account.
+
+Push options:
+  --pairing=PAIRING_ID                 Prepared and completed pairing
+  --source-root=PATH                   Source WordPress document root
+  --source-db-method=auto|wp-cli|native
+                                       Default: auto
+  --target-root=PATH                   Destination WordPress document root
+  --state-dir=PATH                     Persistent private pairing state
+
+All other push-site options are forwarded to import-site on the destination.
+EOF
+}
+
+default_state_dir() {
+  if [[ -n "${XDG_STATE_HOME:-}" ]]; then
+    printf '%s/mb-migrator\n' "$XDG_STATE_HOME"
+  else
+    printf '%s/.local/state/mb-migrator\n' "$HOME"
+  fi
+}
+
+hash_file() {
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" | awk '{print $1}'
+  else die "Required command not found: sha256sum or shasum"; fi
+}
+
+validate_pairing_id() {
+  [[ "$1" =~ ^[a-f0-9]{20}$ ]] || die "Invalid pairing ID: $1"
+}
+
+validate_destination() {
+  [[ "$1" =~ ^[A-Za-z0-9._-]+@[A-Za-z0-9._-]+$ ]] || die "Invalid SSH destination: $1"
+}
+
+validate_port() {
+  [[ "$1" =~ ^[0-9]+$ && "$1" -ge 1 && "$1" -le 65535 ]] || die "Invalid SSH port: $1"
+}
+
+pairing_dir() {
+  local state_dir="$1" pairing_id="$2"
+  validate_pairing_id "$pairing_id"
+  printf '%s/push-pairings/%s\n' "$state_dir" "$pairing_id"
+}
+
+prepare_pairing() (
+  local state_dir pairing_root pending key_file pairing_id final_dir public_key
+  state_dir="$(default_state_dir)"
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --state-dir=*) state_dir="${1#*=}" ;;
+      --help|-h) usage; exit 0 ;;
+      *) die "Unknown push-pair prepare option: $1" ;;
+    esac
+    shift
+  done
+
+  need_cmd ssh-keygen
+  state_dir="$(abs_path_for_create "$state_dir")"
+  pairing_root="$state_dir/push-pairings"
+  mkdir -p "$state_dir" "$pairing_root"
+  chmod 700 "$state_dir" "$pairing_root"
+  pending="$(mktemp -d "$pairing_root/pending.XXXXXX")"
+  trap 'rm -rf "$pending"' EXIT
+  key_file="$pending/id_ed25519"
+  ssh-keygen -q -t ed25519 -N '' -C "mb-migrator outbound push" -f "$key_file"
+  chmod 600 "$key_file"
+  chmod 644 "$key_file.pub"
+  pairing_id="$(hash_file "$key_file.pub" | cut -c1-20)"
+  final_dir="$pairing_root/$pairing_id"
+  [[ ! -e "$final_dir" ]] || die "Pairing already exists: $pairing_id"
+  mv "$pending" "$final_dir"
+  trap - EXIT
+  public_key="$(<"$final_dir/id_ed25519.pub")"
+
+  log "Pairing ID: $pairing_id"
+  log "Private key stored on this source host: $final_dir/id_ed25519"
+  printf '\nInstall this PUBLIC key on the new SSH account:\n\n%s\n\n' "$public_key"
+  printf 'After creating the destination account, complete pairing with:\n\n'
+  printf 'mb-migrator push-pair complete %s USER@HOST --port=22\n' "$pairing_id"
+)
+
+complete_pairing() {
+  local pairing_id="${1:-}" destination="${2:-}" state_dir port pair_dir key_file
+  [[ -n "$pairing_id" && -n "$destination" ]] || die "push-pair complete requires PAIRING_ID and USER@HOST"
+  shift 2
+  state_dir="$(default_state_dir)"
+  port=22
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --port=*) port="${1#*=}" ;;
+      --state-dir=*) state_dir="${1#*=}" ;;
+      --help|-h) usage; return 0 ;;
+      *) die "Unknown push-pair complete option: $1" ;;
+    esac
+    shift
+  done
+  validate_destination "$destination"
+  validate_port "$port"
+  state_dir="$(abs_path_for_create "$state_dir")"
+  pair_dir="$(pairing_dir "$state_dir" "$pairing_id")"
+  key_file="$pair_dir/id_ed25519"
+  [[ -f "$key_file" ]] || die "Pairing key not found for ID $pairing_id"
+  chmod 600 "$key_file"
+
+  log "Verifying outbound SSH key authentication"
+  ssh -p "$port" -i "$key_file" -o BatchMode=yes -o IdentitiesOnly=yes "$destination" true ||
+    die "SSH verification failed; confirm the public key, username, hostname, and port"
+  printf '%s\n' "$destination" > "$pair_dir/destination"
+  printf '%s\n' "$port" > "$pair_dir/port"
+  chmod 600 "$pair_dir/destination" "$pair_dir/port"
+  log "Push pairing verified: $pairing_id"
+  log "Destination: $destination (port $port)"
+}
+
+append_shell_arg() {
+  local variable_name="$1" value="$2" quoted
+  printf -v quoted '%q' "$value"
+  printf -v "$variable_name" '%s %s' "${!variable_name}" "$quoted"
+}
+
+push_site() (
+  local pairing_id="" source_root="" source_db_method="auto" target_root=""
+  local state_dir pair_dir key_file destination port work package
+  local remote_output remote_dir remote_package remote_runner remote_command cleanup_command
+  local repo ref arg
+  local -a restore_args ssh_args scp_args
+
+  state_dir="$(default_state_dir)"
+  restore_args=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --pairing=*) pairing_id="${1#*=}" ;;
+      --source-root=*) source_root="${1#*=}" ;;
+      --source-db-method=*) source_db_method="${1#*=}" ;;
+      --target-root=*) target_root="${1#*=}"; restore_args+=("$1") ;;
+      --state-dir=*) state_dir="${1#*=}" ;;
+      --help|-h) usage; exit 0 ;;
+      --provider=*) die "push-site selects the wordpress-package provider automatically" ;;
+      *) restore_args+=("$1") ;;
+    esac
+    shift
+  done
+
+  [[ -n "$pairing_id" ]] || die "push-site requires --pairing"
+  [[ -n "$source_root" ]] || die "push-site requires --source-root"
+  [[ -n "$target_root" ]] || die "push-site requires --target-root"
+  case "$source_db_method" in auto|wp-cli|native) ;; *) die "Invalid source database method: $source_db_method" ;; esac
+  state_dir="$(abs_path_for_create "$state_dir")"
+  pair_dir="$(pairing_dir "$state_dir" "$pairing_id")"
+  key_file="$pair_dir/id_ed25519"
+  [[ -f "$key_file" && -f "$pair_dir/destination" && -f "$pair_dir/port" ]] ||
+    die "Pairing is incomplete. Run push-pair complete for ID $pairing_id"
+  destination="$(<"$pair_dir/destination")"
+  port="$(<"$pair_dir/port")"
+  validate_destination "$destination"
+  validate_port "$port"
+  chmod 600 "$key_file"
+
+  need_cmd ssh
+  need_cmd scp
+  ssh_args=(-p "$port" -i "$key_file" -o BatchMode=yes -o IdentitiesOnly=yes)
+  scp_args=(-P "$port" -i "$key_file" -o BatchMode=yes -o IdentitiesOnly=yes)
+  log "Verifying saved SSH pairing"
+  ssh "${ssh_args[@]}" "$destination" true || die "Saved SSH pairing could not connect"
+
+  work="$(mktemp -d "${MB_MIGRATOR_TMPDIR:-${TMPDIR:-/tmp}}/mb-push-site.XXXXXX")"
+  trap 'rm -rf "$work"' EXIT
+  package="$work/wordpress-package.tar.gz"
+  "$ROOT_DIR/bin/mb-package" export-site \
+    "--source-root=$source_root" \
+    "--output=$package" \
+    "--db-method=$source_db_method"
+
+  log "Creating private incoming directory on destination"
+  remote_output="$(ssh "${ssh_args[@]}" "$destination" \
+    'umask 077; incoming="$HOME/.local/state/mb-migrator/incoming"; mkdir -p "$incoming"; chmod 700 "$HOME/.local/state" "$HOME/.local/state/mb-migrator" "$incoming" 2>/dev/null || true; dir="$(mktemp -d "$incoming/push.XXXXXX")"; printf "__MB_REMOTE_DIR__=%s\n" "$dir"')"
+  remote_dir="$(printf '%s\n' "$remote_output" | tr -d '\r' | awk -F= '/^__MB_REMOTE_DIR__=/{value=$2} END{print value}')"
+  [[ "$remote_dir" =~ ^/[A-Za-z0-9._/-]+/\.local/state/mb-migrator/incoming/push\.[A-Za-z0-9]+$ ]] ||
+    die "Destination returned an unsafe incoming path"
+  remote_package="$remote_dir/wordpress-package.tar.gz"
+  remote_runner="$remote_dir/remote-run.sh"
+
+  log "Transferring package, checksum, and migration runner over SSH"
+  scp "${scp_args[@]}" "$package" "$package.sha256" "$ROOT_DIR/remote-run.sh" "$destination:$remote_dir/"
+
+  repo="${MB_MIGRATOR_REPO:-mightybox-io/mb-migrator}"
+  ref="${MB_MIGRATOR_REF:-main}"
+  [[ "$repo" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || die "Invalid repository name: $repo"
+  [[ "$ref" =~ ^[A-Za-z0-9._/-]+$ ]] || die "Invalid repository ref: $ref"
+  printf -v remote_command 'MB_MIGRATOR_REPO=%q MB_MIGRATOR_REF=%q bash %q' "$repo" "$ref" "$remote_runner"
+  append_shell_arg remote_command import-site
+  append_shell_arg remote_command "$remote_package"
+  for arg in "${restore_args[@]}"; do append_shell_arg remote_command "$arg"; done
+
+  log "Starting destination import"
+  if [[ -t 0 && -t 1 ]]; then
+    ssh -t "${ssh_args[@]}" "$destination" "$remote_command" || {
+      warn "Destination import failed; transferred package retained at: $destination:$remote_package"
+      exit 1
+    }
+  elif ! ssh "${ssh_args[@]}" "$destination" "$remote_command"; then
+    warn "Destination import failed; transferred package retained at: $destination:$remote_package"
+    exit 1
+  fi
+
+  printf -v cleanup_command 'rm -f %q %q %q && rmdir %q' \
+    "$remote_package" "$remote_package.sha256" "$remote_runner" "$remote_dir"
+  ssh "${ssh_args[@]}" "$destination" "$cleanup_command" ||
+    warn "Migration succeeded, but destination transfer files could not be removed: $remote_dir"
+  log "Push migration completed"
+)
+
+command_name="${1:-}"
+[[ -z "$command_name" ]] || shift
+case "$command_name" in
+  push-pair)
+    action="${1:-}"
+    [[ -z "$action" ]] || shift
+    case "$action" in
+      prepare) prepare_pairing "$@" ;;
+      complete) complete_pairing "$@" ;;
+      --help|-h|'') usage ;;
+      *) die "Unknown push-pair action: $action" ;;
+    esac
+    ;;
+  push-site) push_site "$@" ;;
+  --help|-h|'') usage ;;
+  *) die "Unknown push migration command: $command_name" ;;
+esac

@@ -9,8 +9,13 @@ case "${1:-}" in
     "$SCRIPT_DIR/mb-live-migrate" --help
     printf '\n'
     "$SCRIPT_DIR/mb-package" --help
+    printf '\n'
+    "$SCRIPT_DIR/mb-push-migrate" --help
     printf '\nArchive restore options:\n\n'
     exec "$SCRIPT_DIR/wp-export-migrate" --help
+    ;;
+  push-pair|push-site)
+    exec "$SCRIPT_DIR/mb-push-migrate" "$@"
     ;;
   export-site|import-site)
     exec "$SCRIPT_DIR/mb-package" "$@"

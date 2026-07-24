@@ -74,6 +74,43 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/mightybox-io/mb-migrator
 
 Portable packages contain the database, `wp-content`, non-core root-file candidates, and source URL metadata. They exclude WordPress core and `wp-config.php`. Package files use mode `0600`, and temporary work directories use mode `0700`. The source host needs temporary free space for an extracted copy of the selected site files plus the final compressed package.
 
+## Outbound SSH Push Migration
+
+Use the outbound push workflow when the old host cannot accept inbound SSH but can connect outward to the new host. Pairing is prepared on the old host before the destination username exists. The private key never leaves the old host; install only the generated public key on the new SSH account.
+
+First, run this on the old host:
+
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/mightybox-io/mb-migrator/main/remote-run.sh)" -- push-pair prepare
+```
+
+The command prints a pairing ID and an `ssh-ed25519` public key. Create the destination SSH account and install that public key through the hosting panel or its `~/.ssh/authorized_keys` file.
+
+Back on the old host, complete and verify pairing:
+
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/mightybox-io/mb-migrator/main/remote-run.sh)" -- \
+  push-pair complete PAIRING_ID USER@NEW-HOST \
+  --port=22
+```
+
+The first connection may ask you to confirm the destination SSH host fingerprint. After verification, start the entire migration from the old host:
+
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/mightybox-io/mb-migrator/main/remote-run.sh)" -- \
+  push-site \
+  --pairing=PAIRING_ID \
+  --source-root=/var/www/webroot/ROOT \
+  --source-db-method=auto \
+  --target-root=/home/DESTINATION_USER/htdocs \
+  --new-url=https://new.example.com \
+  --target-db-method=auto
+```
+
+`push-site` creates a temporary portable package on the source, transfers the package and checksum over the saved SSH pairing, starts `import-site` on the destination, and displays its prompts in the source terminal. Successful runs remove the temporary source package and destination transfer directory. When the destination import fails, the transferred package is retained and its remote path is printed for recovery.
+
+Pairing state is private and persists under `~/.local/state/mb-migrator/push-pairings` by default. Use `--state-dir` consistently across prepare, complete, and push when a different location is required. Force native source export with `--source-db-method=native` when source WP-CLI is unavailable.
+
 ## Live Legacy MightyBox Migration
 
 Legacy sites are expected at `/var/www/webroot/ROOT` by default. Run the migrator from the new host as the user that can write the destination WordPress root.
@@ -632,9 +669,10 @@ Run the included smoke test:
 ./tests/live-smoke.sh
 ./tests/native-db-smoke.sh
 ./tests/package-smoke.sh
+./tests/push-smoke.sh
 ```
 
-The tests cover GridPane restore compatibility, live legacy pull and catch-up behavior, portable package export/import, snapshot security, SQL normalization, and native target database backup/import.
+The tests cover GridPane restore compatibility, live legacy pull and catch-up behavior, portable package export/import, outbound SSH push pairing and orchestration, snapshot security, SQL normalization, and native target database backup/import.
 
 Keep generated smoke artifacts for debugging:
 
