@@ -25,6 +25,7 @@ Push options:
                                        Default: auto
   --target-root=PATH                   Default: auto-detect destination root
   --new-url=URL                        Default: destination WP-CLI home URL
+  --transport=auto|rsync|package       Default: auto (prefer rsync)
   --state-dir=PATH                     Persistent private pairing state
 
 All other push-site options are forwarded to import-site on the destination.
@@ -173,12 +174,22 @@ append_shell_arg() {
   printf -v "$variable_name" '%s %s' "${!variable_name}" "$quoted"
 }
 
+run_live_rsync() {
+  local status=0
+  rsync "$@" || status=$?
+  if [[ "$status" -eq 24 ]]; then
+    warn "Some source files vanished during rsync; continuing to the catch-up pass"
+    return 0
+  fi
+  return "$status"
+}
+
 push_site() (
   local pairing_id="" source_root="" source_db_method="auto" target_root="" new_url=""
-  local state_dir pair_dir key_file destination port ssh_dir work package
-  local remote_output remote_dir remote_package remote_runner remote_command import_command cleanup_command url_command login_command
-  local repo ref arg option_name detected_url quoted_target
-  local -a restore_args ssh_args scp_args
+  local transport="auto" selected_transport state_dir pair_dir key_file destination port ssh_dir work package
+  local remote_output remote_dir remote_package remote_stage remote_runner remote_command import_command cleanup_command url_command login_command
+  local repo ref arg option_name detected_url quoted_target source_url ssh_transport remote_prepare remote_rsync_path=""
+  local -a restore_args ssh_args scp_args rsync_args
 
   state_dir="$(default_state_dir)"
   restore_args=()
@@ -189,6 +200,7 @@ push_site() (
       --source-db-method=*) source_db_method="${1#*=}" ;;
       --target-root=*) target_root="${1#*=}"; restore_args+=("$1") ;;
       --new-url=*) new_url="${1#*=}"; restore_args+=("$1") ;;
+      --transport=*) transport="${1#*=}" ;;
       --state-dir=*) state_dir="${1#*=}" ;;
       --help|-h) usage; exit 0 ;;
       --provider=*) die "push-site selects the wordpress-package provider automatically" ;;
@@ -200,6 +212,7 @@ push_site() (
   [[ -n "$pairing_id" ]] || die "push-site requires --pairing"
   [[ -n "$source_root" ]] || die "push-site requires --source-root"
   case "$source_db_method" in auto|wp-cli|native) ;; *) die "Invalid source database method: $source_db_method" ;; esac
+  case "$transport" in auto|rsync|package) ;; *) die "Invalid transport: $transport" ;; esac
   state_dir="$(abs_path_for_create "$state_dir")"
   pair_dir="$(pairing_dir "$state_dir" "$pairing_id")"
   key_file="$pair_dir/id_ed25519"
@@ -214,7 +227,6 @@ push_site() (
   [[ -f "$ssh_dir/known_hosts" ]] || die "SSH known_hosts file is missing; rerun push-pair complete"
 
   need_cmd ssh
-  need_cmd scp
   ssh_args=(-p "$port" -i "$key_file" -o BatchMode=yes -o IdentitiesOnly=yes -o "UserKnownHostsFile=$ssh_dir/known_hosts")
   scp_args=(-P "$port" -i "$key_file" -o BatchMode=yes -o IdentitiesOnly=yes -o "UserKnownHostsFile=$ssh_dir/known_hosts")
   log "Verifying saved SSH pairing"
@@ -251,13 +263,28 @@ push_site() (
     log "Detected destination URL: $new_url"
   fi
 
+  selected_transport="$transport"
+  if [[ "$selected_transport" == "auto" ]]; then
+    if command -v rsync >/dev/null 2>&1; then
+      remote_rsync_path="$(ssh "${ssh_args[@]}" "$destination" "bash -lc 'command -v rsync'" 2>/dev/null |
+        tr -d '\r' | awk 'NF{value=$0} END{print value}')"
+    fi
+    if [[ "$remote_rsync_path" =~ ^/[A-Za-z0-9._/-]+$ ]]; then
+      selected_transport="rsync"
+    else
+      selected_transport="package"
+      warn "rsync is unavailable on one host; falling back to portable package transfer"
+    fi
+  elif [[ "$selected_transport" == "rsync" ]]; then
+    command -v rsync >/dev/null 2>&1 || die "rsync transport requested, but rsync is unavailable on the source"
+    remote_rsync_path="$(ssh "${ssh_args[@]}" "$destination" "bash -lc 'command -v rsync'" 2>/dev/null |
+      tr -d '\r' | awk 'NF{value=$0} END{print value}')"
+    [[ "$remote_rsync_path" =~ ^/[A-Za-z0-9._/-]+$ ]] ||
+      die "rsync transport requested, but rsync is unavailable on the destination"
+  fi
+
   work="$(mktemp -d "${MB_MIGRATOR_TMPDIR:-${TMPDIR:-/tmp}}/mb-push-site.XXXXXX")"
   trap 'rm -rf "$work"' EXIT
-  package="$work/wordpress-package.tar.gz"
-  "$ROOT_DIR/bin/mb-package" export-site \
-    "--source-root=$source_root" \
-    "--output=$package" \
-    "--db-method=$source_db_method"
 
   log "Creating private incoming directory on destination"
   remote_output="$(ssh "${ssh_args[@]}" "$destination" \
@@ -266,36 +293,115 @@ push_site() (
   [[ "$remote_dir" =~ ^/[A-Za-z0-9._/-]+/\.local/state/mb-migrator/incoming/push\.[A-Za-z0-9]+$ ]] ||
     die "Destination returned an unsafe incoming path"
   remote_package="$remote_dir/wordpress-package.tar.gz"
+  remote_stage="$remote_dir/staged-site"
   remote_runner="$remote_dir/remote-run.sh"
-
-  log "Transferring package, checksum, and migration runner over SSH"
-  scp "${scp_args[@]}" "$package" "$package.sha256" "$ROOT_DIR/remote-run.sh" "$destination:$remote_dir/"
 
   repo="${MB_MIGRATOR_REPO:-mightybox-io/mb-migrator}"
   ref="${MB_MIGRATOR_REF:-main}"
   [[ "$repo" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || die "Invalid repository name: $repo"
   [[ "$ref" =~ ^[A-Za-z0-9._/-]+$ ]] || die "Invalid repository ref: $ref"
-  printf -v import_command 'MB_MIGRATOR_REPO=%q MB_MIGRATOR_REF=%q bash %q' "$repo" "$ref" "$remote_runner"
-  append_shell_arg import_command import-site
-  append_shell_arg import_command "$remote_package"
+
+  need_cmd scp
+  if [[ "$selected_transport" == "rsync" ]]; then
+    log "Transport: direct rsync over SSH"
+    log "Preflighting WordPress source"
+    bash "$ROOT_DIR/lib/remote-source.sh" preflight "$source_root" "$source_db_method"
+
+    printf -v remote_prepare 'umask 077; mkdir -p %q %q %q' \
+      "$remote_stage" "$remote_stage/htdocs" "$remote_stage/database-package"
+    ssh "${ssh_args[@]}" "$destination" "$remote_prepare"
+
+    printf -v ssh_transport 'ssh -p %q -i %q -o BatchMode=yes -o IdentitiesOnly=yes -o UserKnownHostsFile=%q' \
+      "$port" "$key_file" "$ssh_dir/known_hosts"
+    rsync_args=(-az --partial --no-perms --no-owner --no-group --omit-dir-times "--rsync-path=$remote_rsync_path")
+    if rsync --info=help 2>&1 | grep -q 'progress2'; then
+      rsync_args+=(--human-readable --info=progress2)
+    else
+      rsync_args+=(--progress)
+    fi
+
+    log "Rsync pass 1 of 2: WordPress files"
+    run_live_rsync "${rsync_args[@]}" -e "$ssh_transport" \
+      "$source_root/wp-content/" "$destination:$remote_stage/htdocs/wp-content/"
+    run_live_rsync "${rsync_args[@]}" -e "$ssh_transport" \
+      --exclude='*/' \
+      --exclude='index.php' \
+      --exclude='license.txt' \
+      --exclude='readme.html' \
+      --exclude='wp-*.php' \
+      --exclude='xmlrpc.php' \
+      --exclude='wp-config.php' \
+      "$source_root/" "$destination:$remote_stage/htdocs/"
+
+    log "Rsync pass 2 of 2: catching files changed during the first pass"
+    run_live_rsync "${rsync_args[@]}" -e "$ssh_transport" \
+      "$source_root/wp-content/" "$destination:$remote_stage/htdocs/wp-content/"
+    run_live_rsync "${rsync_args[@]}" -e "$ssh_transport" \
+      --exclude='*/' \
+      --exclude='index.php' \
+      --exclude='license.txt' \
+      --exclude='readme.html' \
+      --exclude='wp-*.php' \
+      --exclude='xmlrpc.php' \
+      --exclude='wp-config.php' \
+      "$source_root/" "$destination:$remote_stage/htdocs/"
+
+    log "Streaming fresh database export to destination"
+    bash "$ROOT_DIR/lib/remote-source.sh" export-db "$source_root" "$source_db_method" |
+      ssh "${ssh_args[@]}" "$destination" \
+        "umask 077; cat > '$remote_stage/database-package/site.sql'"
+
+    source_url="$(bash "$ROOT_DIR/lib/remote-source.sh" get-url "$source_root" "$source_db_method" 2>/dev/null || true)"
+    [[ "$source_url" != *$'\n'* && "$source_url" != *$'\r'* ]] ||
+      die "Detected source URL contains newlines"
+    {
+      printf 'format=mb-wordpress-package-v1\n'
+      printf 'source_root=%s\n' "$source_root"
+      [[ -z "$source_url" ]] || printf 'source_url=%s\n' "$source_url"
+      printf 'created_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    } > "$work/mb-wordpress-package-manifest"
+    chmod 600 "$work/mb-wordpress-package-manifest"
+
+    log "Transferring migration metadata and runner"
+    scp "${scp_args[@]}" "$work/mb-wordpress-package-manifest" \
+      "$destination:$remote_stage/mb-wordpress-package-manifest"
+    scp "${scp_args[@]}" "$ROOT_DIR/remote-run.sh" "$destination:$remote_runner"
+
+    printf -v import_command 'MB_MIGRATOR_REPO=%q MB_MIGRATOR_REF=%q bash %q' "$repo" "$ref" "$remote_runner"
+    append_shell_arg import_command import-staged
+    append_shell_arg import_command "$remote_stage"
+  else
+    log "Transport: portable package over SSH"
+    package="$work/wordpress-package.tar.gz"
+    "$ROOT_DIR/bin/mb-package" export-site \
+      "--source-root=$source_root" \
+      "--output=$package" \
+      "--db-method=$source_db_method"
+    log "Transferring package, checksum, and migration runner over SSH"
+    scp "${scp_args[@]}" "$package" "$package.sha256" "$ROOT_DIR/remote-run.sh" "$destination:$remote_dir/"
+    printf -v import_command 'MB_MIGRATOR_REPO=%q MB_MIGRATOR_REF=%q bash %q' "$repo" "$ref" "$remote_runner"
+    append_shell_arg import_command import-site
+    append_shell_arg import_command "$remote_package"
+  fi
+
   for arg in "${restore_args[@]}"; do append_shell_arg import_command "$arg"; done
   printf -v remote_command 'bash -lc %q' "$import_command"
 
   log "Starting destination import"
   if [[ -t 0 && -t 1 ]]; then
     ssh -t "${ssh_args[@]}" "$destination" "$remote_command" || {
-      warn "Destination import failed; transferred package retained at: $destination:$remote_package"
+      warn "Destination import failed; transferred migration data retained at: $destination:$remote_dir"
       exit 1
     }
   elif ! ssh "${ssh_args[@]}" "$destination" "$remote_command"; then
-    warn "Destination import failed; transferred package retained at: $destination:$remote_package"
+    warn "Destination import failed; transferred migration data retained at: $destination:$remote_dir"
     exit 1
   fi
 
-  printf -v cleanup_command 'rm -f %q %q %q && rmdir %q' \
+  printf -v cleanup_command 'rm -f %q %q %q; rmdir %q 2>/dev/null || true' \
     "$remote_package" "$remote_package.sha256" "$remote_runner" "$remote_dir"
   ssh "${ssh_args[@]}" "$destination" "$cleanup_command" ||
-    warn "Migration succeeded, but destination transfer files could not be removed: $remote_dir"
+    warn "Migration succeeded, but destination runner cleanup failed: $remote_dir"
   log "Push migration completed"
 )
 

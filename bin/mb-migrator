@@ -17,7 +17,7 @@ case "${1:-}" in
   push-pair|push-site)
     exec "$SCRIPT_DIR/mb-push-migrate" "$@"
     ;;
-  export-site|import-site)
+  export-site|import-site|import-staged)
     exec "$SCRIPT_DIR/mb-package" "$@"
     ;;
   pair|pull)

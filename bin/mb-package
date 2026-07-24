@@ -12,6 +12,7 @@ Portable WordPress package commands:
 
   mb-migrator export-site --source-root=PATH [--output=PACKAGE.tar.gz]
   mb-migrator import-site PACKAGE.tar.gz --target-root=PATH [restore options]
+  mb-migrator import-staged PACKAGE_DIR --target-root=PATH [restore options]
 
 Export options:
   --source-root=PATH              WordPress document root to package
@@ -182,11 +183,25 @@ import_site() {
   exec "$ROOT_DIR/bin/wp-export-migrate" restore "$package" "$@" --provider=wordpress-package
 }
 
+import_staged() {
+  local package_dir="${1:-}"
+  if [[ "$package_dir" == "--help" || "$package_dir" == "-h" ]]; then
+    usage
+    return 0
+  fi
+  [[ -n "$package_dir" && "$package_dir" != --* ]] || die "import-staged requires a package directory"
+  shift
+  package_dir="$(abs_path "$package_dir")"
+  [[ -d "$package_dir" ]] || die "Package directory not found: $package_dir"
+  exec "$ROOT_DIR/bin/wp-export-migrate" restore-directory "$package_dir" "$@" --provider=wordpress-package
+}
+
 command_name="${1:-}"
 [[ -z "$command_name" ]] || shift
 case "$command_name" in
   export-site) export_site "$@" ;;
   import-site) import_site "$@" ;;
+  import-staged) import_staged "$@" ;;
   --help|-h|'') usage ;;
   *) die "Unknown package command: $command_name" ;;
 esac

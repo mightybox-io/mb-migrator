@@ -18,10 +18,13 @@ printf '%s\n' '#!/usr/bin/env bash' \
   'command_text="${!#}"' \
   'case "$command_text" in' \
   '  true) exit 0 ;;' \
+  '  *"command -v rsync"*) printf '\''/usr/bin/rsync\n'\'' ;;' \
   '  *"__MB_TARGET_ROOT__"*) printf '\''__MB_TARGET_ROOT__=/srv/htdocs\n'\'' ;;' \
   '  *"option"*get*siteurl*) printf '\''%s\n'\'' "$command_text" > "$PUSH_URL_MARKER"; printf '\''https://destination-push.example.test\n'\'' ;;' \
   '  *"option"*get*home*) exit 1 ;;' \
   '  *"__MB_REMOTE_DIR__"*) printf '\''__MB_REMOTE_DIR__=/home/destination/.local/state/mb-migrator/incoming/push.test123\n'\'' ;;' \
+  '  *"mkdir -p"*"staged-site"*) exit 0 ;;' \
+  '  *"database-package/site.sql"*) cat > "$PUSH_DB_MARKER" ;;' \
   '  *"rm -f"*) printf '\''%s\n'\'' "$command_text" > "$PUSH_CLEANUP_MARKER" ;;' \
   '  *"remote-run.sh"*) printf '\''%s\n'\'' "$command_text" > "$PUSH_IMPORT_MARKER" ;;' \
   '  *) printf '\''unexpected fake ssh command: %s\n'\'' "$command_text" >&2; exit 1 ;;' \
@@ -29,10 +32,12 @@ printf '%s\n' '#!/usr/bin/env bash' \
 
 printf '%s\n' '#!/usr/bin/env bash' \
   'set -euo pipefail' \
-  '[[ "$*" == *wordpress-package.tar.gz* ]]' \
-  '[[ "$*" == *wordpress-package.tar.gz.sha256* ]]' \
-  '[[ "$*" == *remote-run.sh* ]]' \
-  'printf '\''%s\n'\'' "$*" > "$PUSH_SCP_MARKER"' > "$FAKE_BIN/scp"
+  'printf '\''%s\n'\'' "$*" >> "$PUSH_SCP_MARKER"' > "$FAKE_BIN/scp"
+
+printf '%s\n' '#!/usr/bin/env bash' \
+  'set -euo pipefail' \
+  'if [[ "${1:-}" == "--info=help" ]]; then printf '\''progress2\n'\''; exit 0; fi' \
+  'printf '\''%s\n'\'' "$*" >> "$PUSH_RSYNC_MARKER"' > "$FAKE_BIN/rsync"
 
 printf '%s\n' '#!/usr/bin/env bash' \
   'set -euo pipefail' \
@@ -49,7 +54,7 @@ printf '%s\n' '#!/usr/bin/env bash' \
 printf '%s\n' '#!/usr/bin/env bash' \
   'set -euo pipefail' \
   'printf '\''https://source-push.example.test\n'\''' > "$FAKE_BIN/mariadb"
-chmod +x "$FAKE_BIN/ssh" "$FAKE_BIN/scp" "$FAKE_BIN/ssh-keyscan" "$FAKE_BIN/mariadb-dump" "$FAKE_BIN/mariadb"
+chmod +x "$FAKE_BIN/ssh" "$FAKE_BIN/scp" "$FAKE_BIN/ssh-keyscan" "$FAKE_BIN/mariadb-dump" "$FAKE_BIN/mariadb" "$FAKE_BIN/rsync"
 
 export DB_NAME="push_source"
 export DB_USER="push_user"
@@ -58,6 +63,8 @@ export DB_HOST="localhost"
 export PUSH_IMPORT_MARKER="$TEST_ROOT/import-command"
 export PUSH_CLEANUP_MARKER="$TEST_ROOT/cleanup-command"
 export PUSH_SCP_MARKER="$TEST_ROOT/scp-command"
+export PUSH_RSYNC_MARKER="$TEST_ROOT/rsync-command"
+export PUSH_DB_MARKER="$TEST_ROOT/streamed-db.sql"
 export PUSH_URL_MARKER="$TEST_ROOT/url-command"
 export MB_MIGRATOR_SSH_DIR="$TEST_ROOT/ssh"
 
@@ -87,13 +94,39 @@ PATH="$FAKE_BIN:$PATH" "$ROOT_DIR/bin/mb-migrator" push-site \
   --yes
 
 test -s "$PUSH_SCP_MARKER"
+test -s "$PUSH_RSYNC_MARKER"
+test -s "$PUSH_DB_MARKER"
 test -s "$PUSH_URL_MARKER"
 test -s "$PUSH_IMPORT_MARKER"
 test -s "$PUSH_CLEANUP_MARKER"
-grep -q 'import-site' "$PUSH_IMPORT_MARKER"
+grep -q 'import-staged' "$PUSH_IMPORT_MARKER"
+grep -q 'staged-site' "$PUSH_IMPORT_MARKER"
+[[ "$(wc -l < "$PUSH_RSYNC_MARKER")" -eq 4 ]]
+grep -q -- '--info=progress2' "$PUSH_RSYNC_MARKER"
 grep -q 'cd' "$PUSH_URL_MARKER"
 grep -q 'siteurl' "$PUSH_URL_MARKER"
 grep -q -- '--target-root=/srv/htdocs' "$PUSH_IMPORT_MARKER"
 grep -q -- '--new-url=https://destination-push.example.test' "$PUSH_IMPORT_MARKER"
+
+mv "$PUSH_IMPORT_MARKER" "$TEST_ROOT/rsync-import-command"
+: > "$PUSH_SCP_MARKER"
+PATH="$FAKE_BIN:$PATH" "$ROOT_DIR/bin/mb-migrator" push-site \
+  "--pairing=$pairing_id" \
+  "--state-dir=$STATE_DIR" \
+  "--source-root=$SOURCE" \
+  --source-db-method=native \
+  --transport=package \
+  --target-root=/srv/htdocs \
+  --new-url=https://destination-push.example.test \
+  --target-db-method=native \
+  --db-import=yes \
+  --mu-plugins=skip \
+  --root-extras=skip \
+  --cleanup=no \
+  --yes
+
+grep -q 'import-site' "$PUSH_IMPORT_MARKER"
+grep -q 'wordpress-package.tar.gz' "$PUSH_SCP_MARKER"
+grep -q 'wordpress-package.tar.gz.sha256' "$PUSH_SCP_MARKER"
 
 printf 'outbound push smoke test passed\n'

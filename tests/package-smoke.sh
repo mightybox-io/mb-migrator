@@ -5,6 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/mb-package-test.XXXXXX")"
 SOURCE="$TEST_ROOT/source"
 TARGET="$TEST_ROOT/target"
+STAGED_TARGET="$TEST_ROOT/staged-target"
 FAKE_BIN="$TEST_ROOT/bin"
 CHURN_BIN="$TEST_ROOT/churn-bin"
 PACKAGE="$TEST_ROOT/portable-site.tar.gz"
@@ -12,6 +13,7 @@ trap 'rm -rf "$TEST_ROOT"' EXIT
 
 mkdir -p "$SOURCE/wp-content/plugins/sample-plugin" "$SOURCE/wp-content/themes/sample-theme" "$SOURCE/wp-content/uploads/2026/07"
 mkdir -p "$TARGET/wp-content/plugins" "$TARGET/wp-content/themes" "$TARGET/wp-content/uploads" "$FAKE_BIN" "$CHURN_BIN"
+mkdir -p "$STAGED_TARGET/wp-content/plugins" "$STAGED_TARGET/wp-content/themes" "$STAGED_TARGET/wp-content/uploads"
 printf '%s\n' '<?php // plugin' > "$SOURCE/wp-content/plugins/sample-plugin/plugin.php"
 printf '%s\n' '/* theme */' > "$SOURCE/wp-content/themes/sample-theme/style.css"
 printf '%s\n' 'package upload' > "$SOURCE/wp-content/uploads/2026/07/package.txt"
@@ -21,6 +23,7 @@ printf '%s\n' \
   '<?php' \
   "\$table_prefix = 'wp_';" > "$SOURCE/wp-config.php"
 printf '%s\n' '<?php' "define('DB_NAME', 'target_db');" "\$table_prefix = 'wp_';" > "$TARGET/wp-config.php"
+cp "$TARGET/wp-config.php" "$STAGED_TARGET/wp-config.php"
 
 printf '%s\n' '#!/usr/bin/env bash' \
   'set -euo pipefail' \
@@ -91,5 +94,23 @@ test -f "$TARGET/wp-content/uploads/2026/07/package.txt"
 test -f "$TARGET/verification.html"
 grep -R -q 'Source URL read from package manifest: https://source.example.test' "$TARGET"/restore-*/migration-report.txt
 grep -R -q 'URL rewrite pending' "$TARGET"/restore-*/migration-report.txt
+
+STAGED_PACKAGE="$TEST_ROOT/staged-package"
+mkdir -p "$STAGED_PACKAGE"
+tar -xzf "$PACKAGE" -C "$STAGED_PACKAGE"
+PATH="$FAKE_BIN:$PATH" "$ROOT_DIR/bin/mb-migrator" import-staged "$STAGED_PACKAGE" \
+  --target-root="$STAGED_TARGET" \
+  --new-url=https://staged-destination.example.test \
+  --db-import=no \
+  --root-extras=copy \
+  --mu-plugins=skip \
+  --cleanup=no \
+  --yes
+
+test -f "$STAGED_TARGET/wp-content/plugins/sample-plugin/plugin.php"
+test -f "$STAGED_TARGET/wp-content/uploads/2026/07/package.txt"
+test -f "$STAGED_TARGET/verification.html"
+grep -q 'Source URL read from package manifest: https://source.example.test' \
+  "$STAGED_PACKAGE/migration-report.txt"
 
 printf 'portable package smoke test passed\n'

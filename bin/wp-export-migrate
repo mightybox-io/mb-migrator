@@ -25,6 +25,7 @@ usage() {
   cat <<'EOF' | sed "s/@@PROG@@/$PROG_NAME/g"
 Usage:
   @@PROG@@ restore ARCHIVE.tar.gz --target-root=/srv/htdocs [options]
+  @@PROG@@ restore-directory PACKAGE_DIR --target-root=/srv/htdocs [options]
   @@PROG@@ doctor --target-root=/srv/htdocs [--archive=ARCHIVE.tar.gz]
 
 Options:
@@ -103,15 +104,19 @@ if [[ "$COMMAND" == "doctor" ]]; then
   exit 0
 fi
 
-if [[ "$COMMAND" != "restore" ]]; then
+if [[ "$COMMAND" != "restore" && "$COMMAND" != "restore-directory" ]]; then
   die "Unknown command: $COMMAND"
 fi
 
 ARCHIVE="${1:-}"
 if [[ -z "$ARCHIVE" || "$ARCHIVE" == --* ]]; then
-  die "restore requires an archive path"
+  die "$COMMAND requires a source path"
 fi
 shift
+SOURCE_IS_DIRECTORY=0
+if [[ "$COMMAND" == "restore-directory" ]]; then
+  SOURCE_IS_DIRECTORY=1
+fi
 
 PROVIDER="auto"
 PROVIDER_ADAPTER=""
@@ -169,7 +174,11 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
-[[ -f "$ARCHIVE" ]] || die "Archive not found: $ARCHIVE"
+if [[ "$SOURCE_IS_DIRECTORY" -eq 1 ]]; then
+  [[ -d "$ARCHIVE" ]] || die "Package directory not found: $ARCHIVE"
+else
+  [[ -f "$ARCHIVE" ]] || die "Archive not found: $ARCHIVE"
+fi
 [[ -n "$TARGET_ROOT" ]] || die "--target-root is required"
 [[ -d "$TARGET_ROOT" ]] || die "Target root does not exist: $TARGET_ROOT"
 case "$MU_PLUGINS_MODE" in ask|copy|skip) ;; *) die "--mu-plugins must be ask, copy, or skip" ;; esac
@@ -181,7 +190,9 @@ if [[ "$DB_IMPORT_MODE" != "no" && "$DRY_RUN" -ne 1 ]]; then
   IMPORT_DB=1
 fi
 
-need_cmd tar
+if [[ "$SOURCE_IS_DIRECTORY" -eq 0 ]]; then
+  need_cmd tar
+fi
 need_cmd perl
 need_cmd rsync
 need_cmd grep
@@ -197,7 +208,10 @@ need_cmd head
 ARCHIVE="$(abs_path "$ARCHIVE")"
 TARGET_ROOT="$(abs_path "$TARGET_ROOT")"
 
-if [[ -z "$STAGE_DIR" ]]; then
+if [[ "$SOURCE_IS_DIRECTORY" -eq 1 ]]; then
+  [[ -z "$STAGE_DIR" ]] || die "--stage-dir cannot be used with restore-directory"
+  STAGE_DIR="$ARCHIVE"
+elif [[ -z "$STAGE_DIR" ]]; then
   archive_base="$(basename "$ARCHIVE")"
   archive_base="${archive_base%.tar.gz}"
   archive_base="${archive_base%.tgz}"
@@ -209,16 +223,37 @@ mkdir -p "$STAGE_DIR"
 REPORT_FILE="$STAGE_DIR/migration-report.txt"
 : > "$REPORT_FILE"
 
-log "Archive: $ARCHIVE"
+if [[ "$SOURCE_IS_DIRECTORY" -eq 1 ]]; then
+  log "Package directory: $ARCHIVE"
+  report "Package directory: $ARCHIVE"
+else
+  log "Archive: $ARCHIVE"
+  report "Archive: $ARCHIVE"
+fi
 log "Target root: $TARGET_ROOT"
 log "Stage dir: $STAGE_DIR"
-report "Archive: $ARCHIVE"
 report "Target root: $TARGET_ROOT"
 report "Stage dir: $STAGE_DIR"
 
-preflight_environment "$TARGET_ROOT" "$ARCHIVE" "$IMPORT_DB" "$SEARCH_REPLACE" "$TARGET_DB_METHOD"
+if [[ "$SOURCE_IS_DIRECTORY" -eq 1 ]]; then
+  preflight_environment "$TARGET_ROOT" "" "$IMPORT_DB" "$SEARCH_REPLACE" "$TARGET_DB_METHOD"
+else
+  preflight_environment "$TARGET_ROOT" "$ARCHIVE" "$IMPORT_DB" "$SEARCH_REPLACE" "$TARGET_DB_METHOD"
+fi
 
-archive_index "$ARCHIVE" "$STAGE_DIR"
+if [[ "$SOURCE_IS_DIRECTORY" -eq 1 ]]; then
+  ARCHIVE_INDEX="$STAGE_DIR/.archive-index.txt"
+  log "Indexing staged package contents"
+  (
+    cd "$STAGE_DIR"
+    {
+      find . -mindepth 1 -type d -print | sed 's|$|/|'
+      find . -mindepth 1 ! -type d ! -path './.archive-index.txt' ! -path './migration-report.txt' -print
+    } | LC_ALL=C sort
+  ) > "$ARCHIVE_INDEX"
+else
+  archive_index "$ARCHIVE" "$STAGE_DIR"
+fi
 
 case "$PROVIDER" in
   auto)
@@ -257,8 +292,12 @@ log "Reading provider layout"
 "${PROVIDER_ADAPTER}_load_layout" "$ARCHIVE_INDEX"
 log "Selecting optional paths"
 "${PROVIDER_ADAPTER}_select_optional_paths" "$MU_PLUGINS_MODE" "$ROOT_EXTRAS_MODE"
-log "Extracting provider paths"
-"${PROVIDER_ADAPTER}_extract" "$ARCHIVE" "$STAGE_DIR" "$INCLUDE_MU_PLUGINS"
+if [[ "$SOURCE_IS_DIRECTORY" -eq 1 ]]; then
+  log "Using rsync-staged provider paths"
+else
+  log "Extracting provider paths"
+  "${PROVIDER_ADAPTER}_extract" "$ARCHIVE" "$STAGE_DIR" "$INCLUDE_MU_PLUGINS"
+fi
 "${PROVIDER_ADAPTER}_publish_layout"
 
 if [[ -n "$PROVIDER_MANIFEST_PATH" && -f "$STAGE_DIR/$PROVIDER_MANIFEST_PATH" ]]; then
@@ -319,7 +358,7 @@ CLEANUP_HAS_ITEMS=0
 
 cleanup_show_plan() {
   log "Cleanup would delete these migration artifacts:"
-  if [[ -e "$ARCHIVE" ]]; then
+  if [[ "$SOURCE_IS_DIRECTORY" -eq 0 && -e "$ARCHIVE" ]]; then
     log "- Source export archive: $ARCHIVE"
     CLEANUP_HAS_ITEMS=1
   fi
@@ -364,7 +403,7 @@ cleanup_run() {
     rm -rf "$STAGE_DIR"
   fi
 
-  if [[ -e "$ARCHIVE" ]]; then
+  if [[ "$SOURCE_IS_DIRECTORY" -eq 0 && -e "$ARCHIVE" ]]; then
     log "Deleting source export archive: $ARCHIVE"
     rm -f "$ARCHIVE"
   fi

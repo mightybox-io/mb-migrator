@@ -109,7 +109,23 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/mightybox-io/mb-migrator
   --target-db-method=auto
 ```
 
-`push-site` detects `/srv/htdocs` on the destination, falling back to the destination account's `~/htdocs` when needed. Pass `--target-root` only to override discovery. It runs destination commands through a login shell so hosting-platform PATH and environment setup is available. From inside the detected root it runs `wp option get siteurl`, falling back to `wp option get home`, and uses that value as the new URL for serialized-safe search-replace; pass `--new-url` only to override it. It then creates a temporary portable package on the source, transfers the package and checksum over the saved SSH pairing, starts `import-site` on the destination, and displays its prompts in the source terminal. Successful runs remove the temporary source package and destination transfer directory. When the destination import fails, the transferred package is retained and its remote path is printed for recovery.
+`push-site` detects `/srv/htdocs` on the destination, falling back to the destination account's `~/htdocs` when needed. Pass `--target-root` only to override discovery. It runs destination commands through a login shell so hosting-platform PATH and environment setup is available. From inside the detected root it runs `wp option get siteurl`, falling back to `wp option get home`, and uses that value as the new URL for serialized-safe search-replace; pass `--new-url` only to override it.
+
+When `rsync` is available on both hosts, `push-site` transfers files directly into a private staging directory on the destination. It makes an initial pass followed by a short catch-up pass for files that changed during transfer, displays rsync byte/percentage progress when the installed version supports it, and then streams a fresh database dump over SSH. The staged files go through the same guarded importer used by portable packages; this preserves prompts, managed-plugin exclusions, database backup/import, and serialized-safe URL replacement. It never uses rsync `--delete`, so source deletions are not propagated to the destination.
+
+If either host lacks `rsync`, automatic mode falls back to building and transferring the portable tar package. Use `--transport=rsync` to require direct transfer or `--transport=package` to force the older package workflow:
+
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/mightybox-io/mb-migrator/main/remote-run.sh)" -- \
+  push-site \
+  --pairing=PAIRING_ID \
+  --source-root=/var/www/webroot/ROOT \
+  --transport=rsync \
+  --source-db-method=auto \
+  --target-db-method=auto
+```
+
+Successful runs remove temporary transfer data when destination cleanup is accepted. When destination cleanup is declined, its staging directory and report remain available. When an import fails, the private incoming directory is retained and its remote path is printed for recovery.
 
 Pairing state is private and persists under `~/.local/state/mb-migrator/push-pairings` by default. Use `--state-dir` consistently across prepare, complete, and push when a different location is required. Force native source export with `--source-db-method=native` when source WP-CLI is unavailable.
 
