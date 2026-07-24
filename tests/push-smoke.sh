@@ -14,6 +14,7 @@ printf '%s\n' '<?php' "\$table_prefix = 'wp_';" > "$SOURCE/wp-config.php"
 
 printf '%s\n' '#!/usr/bin/env bash' \
   'set -euo pipefail' \
+  '[[ " $* " == *" -G "* ]] && exit 1' \
   'command_text="${!#}"' \
   'case "$command_text" in' \
   '  true) exit 0 ;;' \
@@ -32,6 +33,12 @@ printf '%s\n' '#!/usr/bin/env bash' \
 
 printf '%s\n' '#!/usr/bin/env bash' \
   'set -euo pipefail' \
+  'host="${!#}"' \
+  'public_key="$(awk '\''{print $1 " " $2; exit}'\'' "$PUSH_SCAN_KEY")"' \
+  'printf '\''[%s]:3022 %s\n'\'' "$host" "$public_key"' > "$FAKE_BIN/ssh-keyscan"
+
+printf '%s\n' '#!/usr/bin/env bash' \
+  'set -euo pipefail' \
   'cnf="${1#--defaults-extra-file=}"' \
   'grep -q '\''password="push-secret"'\'' "$cnf"' \
   'printf '\''DROP TABLE IF EXISTS `wp_options`;\nCREATE TABLE `wp_options` (`option_id` bigint);\nINSERT INTO `wp_options` VALUES (1);\n'\''' > "$FAKE_BIN/mariadb-dump"
@@ -39,7 +46,7 @@ printf '%s\n' '#!/usr/bin/env bash' \
 printf '%s\n' '#!/usr/bin/env bash' \
   'set -euo pipefail' \
   'printf '\''https://source-push.example.test\n'\''' > "$FAKE_BIN/mariadb"
-chmod +x "$FAKE_BIN/ssh" "$FAKE_BIN/scp" "$FAKE_BIN/mariadb-dump" "$FAKE_BIN/mariadb"
+chmod +x "$FAKE_BIN/ssh" "$FAKE_BIN/scp" "$FAKE_BIN/ssh-keyscan" "$FAKE_BIN/mariadb-dump" "$FAKE_BIN/mariadb"
 
 export DB_NAME="push_source"
 export DB_USER="push_user"
@@ -55,11 +62,13 @@ pairing_id="$(printf '%s\n' "$prepare_output" | awk -F': ' '/Pairing ID:/{print 
 [[ "$pairing_id" =~ ^[a-f0-9]{20}$ ]]
 test -s "$STATE_DIR/push-pairings/$pairing_id/id_ed25519"
 test -s "$STATE_DIR/push-pairings/$pairing_id/id_ed25519.pub"
+export PUSH_SCAN_KEY="$STATE_DIR/push-pairings/$pairing_id/id_ed25519.pub"
 
 PATH="$FAKE_BIN:$PATH" "$ROOT_DIR/bin/mb-migrator" push-pair complete \
   "$pairing_id" newuser@new.example.test \
   --port=3022 \
   "--state-dir=$STATE_DIR"
+test -s "$MB_MIGRATOR_SSH_DIR/known_hosts"
 
 PATH="$FAKE_BIN:$PATH" "$ROOT_DIR/bin/mb-migrator" push-site \
   "--pairing=$pairing_id" \

@@ -101,6 +101,7 @@ prepare_pairing() (
 
 complete_pairing() {
   local pairing_id="${1:-}" destination="${2:-}" state_dir port pair_dir key_file ssh_dir
+  local host host_lookup strict_policy scan_file
   [[ -n "$pairing_id" && -n "$destination" ]] || die "push-pair complete requires PAIRING_ID and USER@HOST"
   shift 2
   state_dir="$(default_state_dir)"
@@ -127,11 +128,34 @@ complete_pairing() {
   touch "$ssh_dir/known_hosts"
   chmod 600 "$ssh_dir/known_hosts"
 
+  strict_policy="accept-new"
+  if ! ssh -G -o StrictHostKeyChecking=accept-new "$destination" >/dev/null 2>&1; then
+    strict_policy="yes"
+    need_cmd ssh-keyscan
+    host="${destination#*@}"
+    if [[ "$port" == "22" ]]; then host_lookup="$host"
+    else host_lookup="[$host]:$port"; fi
+    if ! ssh-keygen -F "$host_lookup" -f "$ssh_dir/known_hosts" >/dev/null 2>&1; then
+      scan_file="$(mktemp "${TMPDIR:-/tmp}/mb-push-host-key.XXXXXX")"
+      if ! ssh-keyscan -T 10 -p "$port" "$host" > "$scan_file" 2>/dev/null || [[ ! -s "$scan_file" ]]; then
+        rm -f "$scan_file"
+        die "Could not retrieve the destination SSH host key"
+      fi
+      ssh-keygen -lf "$scan_file" || {
+        rm -f "$scan_file"
+        die "Destination returned an invalid SSH host key"
+      }
+      cat "$scan_file" >> "$ssh_dir/known_hosts"
+      rm -f "$scan_file"
+      warn "This older SSH client lacks accept-new; recorded the displayed destination host key"
+    fi
+  fi
+
   log "Verifying outbound SSH host key and key authentication"
   ssh -p "$port" -i "$key_file" \
     -o BatchMode=yes \
     -o IdentitiesOnly=yes \
-    -o StrictHostKeyChecking=accept-new \
+    -o "StrictHostKeyChecking=$strict_policy" \
     -o "UserKnownHostsFile=$ssh_dir/known_hosts" \
     "$destination" true ||
     die "SSH verification failed; confirm the public key, username, hostname, and port"
