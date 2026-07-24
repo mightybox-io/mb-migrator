@@ -208,6 +208,8 @@ need_cmd comm
 need_cmd diff
 need_cmd date
 need_cmd head
+need_cmd ln
+need_cmd readlink
 
 ARCHIVE="$(abs_path "$ARCHIVE")"
 TARGET_ROOT="$(abs_path "$TARGET_ROOT")"

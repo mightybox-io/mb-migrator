@@ -128,7 +128,7 @@ preflight_environment() {
   report "Working directory: $(pwd)"
   report "Bash version: ${BASH_VERSION:-unknown}"
 
-  for cmd in tar perl rsync grep sed awk find sort comm diff date head rm cp mkdir; do
+  for cmd in tar perl rsync grep sed awk find sort comm diff date head rm cp mkdir ln readlink; do
     if command -v "$cmd" >/dev/null 2>&1; then
       report "Command $cmd: $(command -v "$cmd")"
     else

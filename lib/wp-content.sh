@@ -15,6 +15,61 @@ merge_wp_content() {
   if [[ "${INCLUDE_MU_PLUGINS:-0}" -eq 1 ]]; then
     merge_wp_content_subdir "$source_wp_content" "$dest_wp_content" "mu-plugins"
   fi
+
+  materialize_internal_web_symlinks "$source_wp_content" "$dest_wp_content"
+}
+
+materialize_internal_web_symlinks() {
+  local source_wp_content="$1"
+  local dest_wp_content="$2"
+  local link_list source_link link_target relative_path dest_link dest_target
+  local pass progress converted=0 unresolved=0
+
+  link_list="$dest_wp_content/.mb-migrator-symlinks.$$"
+  find "$source_wp_content" -type l -print > "$link_list"
+
+  for pass in 1 2 3 4 5; do
+    progress=0
+    while IFS= read -r source_link; do
+      link_target="$(readlink "$source_link")"
+      case "$link_target" in
+        /*/wp-content/*) relative_path="${link_target#*/wp-content/}" ;;
+        *) continue ;;
+      esac
+      case "/$relative_path/" in
+        */../*|*/./*) continue ;;
+      esac
+
+      dest_link="$dest_wp_content/${source_link#"$source_wp_content/"}"
+      dest_target="$dest_wp_content/$relative_path"
+      [[ -L "$dest_link" && -f "$dest_target" ]] || continue
+
+      ln -f "$dest_target" "$dest_link"
+      converted=$((converted + 1))
+      progress=$((progress + 1))
+    done < "$link_list"
+    [[ "$progress" -gt 0 ]] || break
+  done
+
+  while IFS= read -r source_link; do
+    link_target="$(readlink "$source_link")"
+    case "$link_target" in
+      /*/wp-content/*)
+        dest_link="$dest_wp_content/${source_link#"$source_wp_content/"}"
+        [[ ! -L "$dest_link" ]] || unresolved=$((unresolved + 1))
+        ;;
+    esac
+  done < "$link_list"
+  rm -f "$link_list"
+
+  if [[ "$converted" -gt 0 ]]; then
+    log "Converted $converted legacy absolute web symlink(s) to nginx-compatible hard links"
+    report "Converted legacy absolute web symlinks to hard links: $converted"
+  fi
+  if [[ "$unresolved" -gt 0 ]]; then
+    warn "$unresolved legacy absolute web symlink(s) still have missing destination targets"
+    report "Legacy absolute web symlinks with missing targets: $unresolved"
+  fi
 }
 
 merge_wp_content_subdir() {

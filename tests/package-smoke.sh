@@ -20,11 +20,15 @@ file_mode() {
 }
 
 mkdir -p "$SOURCE/wp-content/plugins/sample-plugin" "$SOURCE/wp-content/themes/sample-theme" "$SOURCE/wp-content/uploads/2026/07"
+mkdir -p "$SOURCE/wp-content/uploads/bb-platform-previews/example"
 mkdir -p "$TARGET/wp-content/plugins" "$TARGET/wp-content/themes" "$TARGET/wp-content/uploads" "$FAKE_BIN" "$CHURN_BIN"
 mkdir -p "$STAGED_TARGET/wp-content/plugins" "$STAGED_TARGET/wp-content/themes" "$STAGED_TARGET/wp-content/uploads"
 printf '%s\n' '<?php // plugin' > "$SOURCE/wp-content/plugins/sample-plugin/plugin.php"
 printf '%s\n' '/* theme */' > "$SOURCE/wp-content/themes/sample-theme/style.css"
 printf '%s\n' 'package upload' > "$SOURCE/wp-content/uploads/2026/07/package.txt"
+ln -s \
+  /var/www/webroot/ROOT/wp-content/uploads/2026/07/package.txt \
+  "$SOURCE/wp-content/uploads/bb-platform-previews/example/preview.txt"
 printf '%s\n' 'verification' > "$SOURCE/verification.html"
 printf '%s\n' '<?php core' > "$SOURCE/wp-load.php"
 printf '%s\n' \
@@ -99,6 +103,9 @@ PATH="$FAKE_BIN:$PATH" "$ROOT_DIR/bin/mb-migrator" import-site "$PACKAGE" \
 test -f "$TARGET/wp-content/plugins/sample-plugin/plugin.php"
 test -f "$TARGET/wp-content/themes/sample-theme/style.css"
 test -f "$TARGET/wp-content/uploads/2026/07/package.txt"
+test -f "$TARGET/wp-content/uploads/bb-platform-previews/example/preview.txt"
+test ! -L "$TARGET/wp-content/uploads/bb-platform-previews/example/preview.txt"
+[[ "$(file_mode "$TARGET/wp-content/uploads/bb-platform-previews/example/preview.txt")" == "644" ]]
 test -f "$TARGET/verification.html"
 [[ "$(file_mode "$TARGET/wp-content/plugins/sample-plugin")" == "755" ]]
 [[ "$(file_mode "$TARGET/wp-content/plugins/sample-plugin/plugin.php")" == "644" ]]

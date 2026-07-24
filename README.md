@@ -384,6 +384,8 @@ wp-content/uploads
 
 It does not delete destination files. Existing destination symlinks are preserved unless `--replace-managed-symlinks` is passed. Copied web directories are normalized to mode `755` and copied web files to `644`, preventing the migrator's private staging umask from making restored assets unreadable by the web server.
 
+Absolute symlinks that point back into the source site's own `wp-content` are converted to destination hard links when the corresponding media exists. This supports generated BuddyBoss previews on nginx hosts without duplicating the underlying file data. Links whose source media is missing remain staged and are reported.
+
 The importer also skips platform-managed cache/server-helper plugins during plugin merges. These should be managed by the target platform rather than copied from the source export.
 
 Skipped plugin slugs include:
