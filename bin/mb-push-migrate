@@ -100,7 +100,7 @@ prepare_pairing() (
 )
 
 complete_pairing() {
-  local pairing_id="${1:-}" destination="${2:-}" state_dir port pair_dir key_file
+  local pairing_id="${1:-}" destination="${2:-}" state_dir port pair_dir key_file ssh_dir
   [[ -n "$pairing_id" && -n "$destination" ]] || die "push-pair complete requires PAIRING_ID and USER@HOST"
   shift 2
   state_dir="$(default_state_dir)"
@@ -121,9 +121,19 @@ complete_pairing() {
   key_file="$pair_dir/id_ed25519"
   [[ -f "$key_file" ]] || die "Pairing key not found for ID $pairing_id"
   chmod 600 "$key_file"
+  ssh_dir="${MB_MIGRATOR_SSH_DIR:-$HOME/.ssh}"
+  mkdir -p "$ssh_dir"
+  chmod 700 "$ssh_dir"
+  touch "$ssh_dir/known_hosts"
+  chmod 600 "$ssh_dir/known_hosts"
 
-  log "Verifying outbound SSH key authentication"
-  ssh -p "$port" -i "$key_file" -o BatchMode=yes -o IdentitiesOnly=yes "$destination" true ||
+  log "Verifying outbound SSH host key and key authentication"
+  ssh -p "$port" -i "$key_file" \
+    -o BatchMode=yes \
+    -o IdentitiesOnly=yes \
+    -o StrictHostKeyChecking=accept-new \
+    -o "UserKnownHostsFile=$ssh_dir/known_hosts" \
+    "$destination" true ||
     die "SSH verification failed; confirm the public key, username, hostname, and port"
   printf '%s\n' "$destination" > "$pair_dir/destination"
   printf '%s\n' "$port" > "$pair_dir/port"
@@ -140,7 +150,7 @@ append_shell_arg() {
 
 push_site() (
   local pairing_id="" source_root="" source_db_method="auto" target_root=""
-  local state_dir pair_dir key_file destination port work package
+  local state_dir pair_dir key_file destination port ssh_dir work package
   local remote_output remote_dir remote_package remote_runner remote_command cleanup_command
   local repo ref arg
   local -a restore_args ssh_args scp_args
@@ -175,11 +185,13 @@ push_site() (
   validate_destination "$destination"
   validate_port "$port"
   chmod 600 "$key_file"
+  ssh_dir="${MB_MIGRATOR_SSH_DIR:-$HOME/.ssh}"
+  [[ -f "$ssh_dir/known_hosts" ]] || die "SSH known_hosts file is missing; rerun push-pair complete"
 
   need_cmd ssh
   need_cmd scp
-  ssh_args=(-p "$port" -i "$key_file" -o BatchMode=yes -o IdentitiesOnly=yes)
-  scp_args=(-P "$port" -i "$key_file" -o BatchMode=yes -o IdentitiesOnly=yes)
+  ssh_args=(-p "$port" -i "$key_file" -o BatchMode=yes -o IdentitiesOnly=yes -o "UserKnownHostsFile=$ssh_dir/known_hosts")
+  scp_args=(-P "$port" -i "$key_file" -o BatchMode=yes -o IdentitiesOnly=yes -o "UserKnownHostsFile=$ssh_dir/known_hosts")
   log "Verifying saved SSH pairing"
   ssh "${ssh_args[@]}" "$destination" true || die "Saved SSH pairing could not connect"
 

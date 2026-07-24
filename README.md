@@ -94,7 +94,7 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/mightybox-io/mb-migrator
   --port=22
 ```
 
-The first connection may ask you to confirm the destination SSH host fingerprint. After verification, start the entire migration from the old host:
+The first connection records a previously unseen destination SSH host key using OpenSSH's `accept-new` policy. Previously recorded keys must still match, so changed host keys are rejected. After verification, start the entire migration from the old host:
 
 ```bash
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/mightybox-io/mb-migrator/main/remote-run.sh)" -- \
