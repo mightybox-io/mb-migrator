@@ -11,6 +11,14 @@ CHURN_BIN="$TEST_ROOT/churn-bin"
 PACKAGE="$TEST_ROOT/portable-site.tar.gz"
 trap 'rm -rf "$TEST_ROOT"' EXIT
 
+file_mode() {
+  if stat -c '%a' "$1" >/dev/null 2>&1; then
+    stat -c '%a' "$1"
+  else
+    stat -f '%Lp' "$1"
+  fi
+}
+
 mkdir -p "$SOURCE/wp-content/plugins/sample-plugin" "$SOURCE/wp-content/themes/sample-theme" "$SOURCE/wp-content/uploads/2026/07"
 mkdir -p "$TARGET/wp-content/plugins" "$TARGET/wp-content/themes" "$TARGET/wp-content/uploads" "$FAKE_BIN" "$CHURN_BIN"
 mkdir -p "$STAGED_TARGET/wp-content/plugins" "$STAGED_TARGET/wp-content/themes" "$STAGED_TARGET/wp-content/uploads"
@@ -92,6 +100,10 @@ test -f "$TARGET/wp-content/plugins/sample-plugin/plugin.php"
 test -f "$TARGET/wp-content/themes/sample-theme/style.css"
 test -f "$TARGET/wp-content/uploads/2026/07/package.txt"
 test -f "$TARGET/verification.html"
+[[ "$(file_mode "$TARGET/wp-content/plugins/sample-plugin")" == "755" ]]
+[[ "$(file_mode "$TARGET/wp-content/plugins/sample-plugin/plugin.php")" == "644" ]]
+[[ "$(file_mode "$TARGET/wp-content/uploads/2026/07/package.txt")" == "644" ]]
+[[ "$(file_mode "$TARGET/verification.html")" == "644" ]]
 grep -R -q 'Source URL read from package manifest: https://source.example.test' "$TARGET"/restore-*/migration-report.txt
 grep -R -q 'URL rewrite pending' "$TARGET"/restore-*/migration-report.txt
 COMBINED_SQL="$(find "$TARGET" -name '*-combined-phpmyadmin-import.sql' -print -quit)"

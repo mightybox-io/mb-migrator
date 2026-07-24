@@ -58,9 +58,11 @@ merge_wp_content_subdir() {
 
     if [[ -d "$item" ]]; then
       mkdir -p "$dest_item"
-      rsync -rl --no-perms --no-owner --no-group --omit-dir-times "$item/" "$dest_item/"
+      rsync -rlt --perms --chmod=Du=rwx,Dgo=rx,Fu=rw,Fgo=r \
+        --no-owner --no-group --omit-dir-times "$item/" "$dest_item/"
     else
-      rsync -rl --no-perms --no-owner --no-group --omit-dir-times "$item" "$dest/"
+      rsync -rlt --perms --chmod=Fu=rw,Fgo=r \
+        --no-owner --no-group --omit-dir-times "$item" "$dest/"
     fi
   done < "$item_list"
   rm -f "$item_list"
@@ -112,7 +114,8 @@ copy_web_root_files() {
       continue
     fi
 
-    rsync -l --no-perms --no-owner --no-group --omit-dir-times "$source_file" "$target_file"
+    rsync -lt --perms --chmod=Fu=rw,Fgo=r \
+      --no-owner --no-group --omit-dir-times "$source_file" "$target_file"
     report "Copied root-level file from $source_file to $target_file"
   done
 }

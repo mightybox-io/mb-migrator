@@ -382,7 +382,7 @@ wp-content/themes
 wp-content/uploads
 ```
 
-It does not delete destination files. Existing destination symlinks are preserved unless `--replace-managed-symlinks` is passed.
+It does not delete destination files. Existing destination symlinks are preserved unless `--replace-managed-symlinks` is passed. Copied web directories are normalized to mode `755` and copied web files to `644`, preventing the migrator's private staging umask from making restored assets unreadable by the web server.
 
 The importer also skips platform-managed cache/server-helper plugins during plugin merges. These should be managed by the target platform rather than copied from the source export.
 
