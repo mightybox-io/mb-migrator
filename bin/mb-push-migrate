@@ -23,7 +23,7 @@ Push options:
   --source-root=PATH                   Source WordPress document root
   --source-db-method=auto|wp-cli|native
                                        Default: auto
-  --target-root=PATH                   Destination WordPress document root
+  --target-root=PATH                   Default: auto-detect destination root
   --new-url=URL                        Default: destination WP-CLI home URL
   --state-dir=PATH                     Persistent private pairing state
 
@@ -199,7 +199,6 @@ push_site() (
 
   [[ -n "$pairing_id" ]] || die "push-site requires --pairing"
   [[ -n "$source_root" ]] || die "push-site requires --source-root"
-  [[ -n "$target_root" ]] || die "push-site requires --target-root"
   case "$source_db_method" in auto|wp-cli|native) ;; *) die "Invalid source database method: $source_db_method" ;; esac
   state_dir="$(abs_path_for_create "$state_dir")"
   pair_dir="$(pairing_dir "$state_dir" "$pairing_id")"
@@ -220,6 +219,17 @@ push_site() (
   scp_args=(-P "$port" -i "$key_file" -o BatchMode=yes -o IdentitiesOnly=yes -o "UserKnownHostsFile=$ssh_dir/known_hosts")
   log "Verifying saved SSH pairing"
   ssh "${ssh_args[@]}" "$destination" true || die "Saved SSH pairing could not connect"
+
+  if [[ -z "$target_root" ]]; then
+    remote_output="$(ssh "${ssh_args[@]}" "$destination" \
+      'target=""; if [ -d /srv/htdocs ] && [ -f /srv/htdocs/wp-config.php ]; then target=/srv/htdocs; elif [ -d "$HOME/htdocs" ] && [ -f "$HOME/htdocs/wp-config.php" ]; then target="$(readlink -f "$HOME/htdocs" 2>/dev/null || printf "%s" "$HOME/htdocs")"; fi; printf "__MB_TARGET_ROOT__=%s\n" "$target"')"
+    target_root="$(printf '%s\n' "$remote_output" | tr -d '\r' |
+      awk -F= '/^__MB_TARGET_ROOT__=/{value=$2} END{print value}')"
+    [[ "$target_root" =~ ^/[A-Za-z0-9._/-]+$ ]] ||
+      die "Could not auto-detect the destination WordPress root; pass --target-root explicitly"
+    restore_args+=("--target-root=$target_root")
+    log "Detected destination root: $target_root"
+  fi
 
   if [[ -z "$new_url" ]]; then
     url_command=""

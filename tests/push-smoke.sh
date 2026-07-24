@@ -18,6 +18,7 @@ printf '%s\n' '#!/usr/bin/env bash' \
   'command_text="${!#}"' \
   'case "$command_text" in' \
   '  true) exit 0 ;;' \
+  '  *"__MB_TARGET_ROOT__"*) printf '\''__MB_TARGET_ROOT__=/srv/htdocs\n'\'' ;;' \
   '  *"option get home"*) printf '\''https://destination-push.example.test\n'\'' ;;' \
   '  *"__MB_REMOTE_DIR__"*) printf '\''__MB_REMOTE_DIR__=/home/destination/.local/state/mb-migrator/incoming/push.test123\n'\'' ;;' \
   '  *"rm -f"*) printf '\''%s\n'\'' "$command_text" > "$PUSH_CLEANUP_MARKER" ;;' \
@@ -76,7 +77,6 @@ PATH="$FAKE_BIN:$PATH" "$ROOT_DIR/bin/mb-migrator" push-site \
   "--state-dir=$STATE_DIR" \
   "--source-root=$SOURCE" \
   --source-db-method=native \
-  --target-root=/home/newuser/htdocs \
   --target-db-method=native \
   --db-import=yes \
   --mu-plugins=skip \
@@ -88,7 +88,7 @@ test -s "$PUSH_SCP_MARKER"
 test -s "$PUSH_IMPORT_MARKER"
 test -s "$PUSH_CLEANUP_MARKER"
 grep -q 'import-site' "$PUSH_IMPORT_MARKER"
-grep -q -- '--target-root=/home/newuser/htdocs' "$PUSH_IMPORT_MARKER"
+grep -q -- '--target-root=/srv/htdocs' "$PUSH_IMPORT_MARKER"
 grep -q -- '--new-url=https://destination-push.example.test' "$PUSH_IMPORT_MARKER"
 
 printf 'outbound push smoke test passed\n'
