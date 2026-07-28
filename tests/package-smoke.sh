@@ -39,13 +39,15 @@ cp "$TARGET/wp-config.php" "$STAGED_TARGET/wp-config.php"
 
 printf '%s\n' '#!/usr/bin/env bash' \
   'set -euo pipefail' \
+  'if [[ "${1:-}" == "--help" ]]; then printf '\''  --column-statistics=#\n'\''; exit 0; fi' \
+  '[[ " $* " == *" --column-statistics=0 "* ]]' \
   'cnf="${1#--defaults-extra-file=}"' \
   'grep -q '\''password="package-secret"'\'' "$cnf"' \
-  'printf '\''/*!40014 SET @OLD_FOREIGN_KEY_CHECKS=@@FOREIGN_KEY_CHECKS, FOREIGN_KEY_CHECKS=0 */;\nDROP TABLE IF EXISTS `wp_options`;\nCREATE TABLE `wp_options` (`option_id` bigint);\nINSERT INTO `wp_options` VALUES (1);\n/*!50001 CREATE ALGORITHM=UNDEFINED */\n/*!50013 DEFINER=`source-user`@`%%` SQL SECURITY DEFINER */\n/*!50001 VIEW `wp_test_view` AS select 1 AS `value` */;\nCREATE DEFINER='\''source-user'\''@'\''source-host'\'' PROCEDURE `wp_test_proc`() SELECT 1;\n/*!40014 SET FOREIGN_KEY_CHECKS=@OLD_FOREIGN_KEY_CHECKS */;\n'\''' > "$FAKE_BIN/mariadb-dump"
+  'printf '\''/*!40014 SET @OLD_FOREIGN_KEY_CHECKS=@@FOREIGN_KEY_CHECKS, FOREIGN_KEY_CHECKS=0 */;\nDROP TABLE IF EXISTS `wp_options`;\nCREATE TABLE `wp_options` (`option_id` bigint);\nINSERT INTO `wp_options` VALUES (1);\n/*!50001 CREATE ALGORITHM=UNDEFINED */\n/*!50013 DEFINER=`source-user`@`%%` SQL SECURITY DEFINER */\n/*!50001 VIEW `wp_test_view` AS select 1 AS `value` */;\nCREATE DEFINER='\''source-user'\''@'\''source-host'\'' PROCEDURE `wp_test_proc`() SELECT 1;\n/*!40014 SET FOREIGN_KEY_CHECKS=@OLD_FOREIGN_KEY_CHECKS */;\n'\''' > "$FAKE_BIN/mysqldump"
 printf '%s\n' '#!/usr/bin/env bash' \
   'set -euo pipefail' \
   'printf '\''https://source.example.test\n'\''' > "$FAKE_BIN/mariadb"
-chmod +x "$FAKE_BIN/mariadb-dump" "$FAKE_BIN/mariadb"
+chmod +x "$FAKE_BIN/mysqldump" "$FAKE_BIN/mariadb"
 
 export DB_NAME="source_db"
 export DB_USER="source_user"

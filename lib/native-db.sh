@@ -9,7 +9,7 @@ wp_config_value() {
     fi
   fi
   command -v php >/dev/null 2>&1 || return 1
-  php -r '
+  php -n -r '
     $text = file_get_contents($argv[1]);
     $key = preg_quote($argv[2], "/");
     $kind = $argv[3];
@@ -71,12 +71,24 @@ native_db_client_binary() {
 
 native_db_backup() (
   local target_root="$1" backup="$2" cnf dump_bin
+  local -a dump_args
   umask 077
   dump_bin="$(native_db_dump_binary)" || die "Neither mariadb-dump nor mysqldump is available"
   cnf="$(mktemp "${TMPDIR:-/tmp}/mb-migrator-target-db.XXXXXX")"
   trap 'rm -f "$cnf"' EXIT
   native_db_create_config "$target_root" "$cnf"
-  if ! "$dump_bin" --defaults-extra-file="$cnf" --single-transaction --quick --skip-lock-tables --hex-blob --default-character-set=utf8mb4 "$NATIVE_DB_NAME" > "$backup"; then
+  dump_args=(
+    "--defaults-extra-file=$cnf"
+    --single-transaction
+    --quick
+    --skip-lock-tables
+    --hex-blob
+    --default-character-set=utf8mb4
+  )
+  if "$dump_bin" --help 2>/dev/null | grep -q -- '--column-statistics'; then
+    dump_args+=(--column-statistics=0)
+  fi
+  if ! "$dump_bin" "${dump_args[@]}" "$NATIVE_DB_NAME" > "$backup"; then
     rm -f "$cnf" "$backup"
     die "Native target database backup failed"
   fi

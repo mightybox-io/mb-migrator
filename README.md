@@ -32,6 +32,8 @@ Database export defaults to `auto`, which tries WP-CLI first and then native `ma
 --db-method=native
 ```
 
+When a MySQL `mysqldump` client connects to a MariaDB server, the migrator detects client support for column statistics and adds `--column-statistics=0`. This avoids failures caused by MariaDB not providing MySQL's `information_schema.COLUMN_STATISTICS` table.
+
 The export produces:
 
 ```text

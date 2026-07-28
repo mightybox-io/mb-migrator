@@ -23,7 +23,7 @@ config_value() {
     fi
   fi
   command -v php >/dev/null 2>&1 || return 1
-  php -r '
+  php -n -r '
     $text = file_get_contents($argv[1]);
     $key = preg_quote($argv[2], "/");
     $kind = $argv[3];
@@ -83,13 +83,26 @@ create_native_config() {
 
 native_dump() (
   local dump_bin cnf
+  local -a dump_args
   if command -v mariadb-dump >/dev/null 2>&1; then dump_bin="$(command -v mariadb-dump)"
   elif command -v mysqldump >/dev/null 2>&1; then dump_bin="$(command -v mysqldump)"
   else fail "neither mariadb-dump nor mysqldump is available"; fi
   cnf="$(mktemp "${TMPDIR:-/tmp}/mb-migrator-db.XXXXXX")"
   trap 'rm -f "$cnf"' EXIT
   create_native_config "$cnf"
-  "$dump_bin" --defaults-extra-file="$cnf" --single-transaction --quick --skip-lock-tables --hex-blob --default-character-set=utf8mb4 --skip-add-drop-table "$NATIVE_DB_NAME"
+  dump_args=(
+    "--defaults-extra-file=$cnf"
+    --single-transaction
+    --quick
+    --skip-lock-tables
+    --hex-blob
+    --default-character-set=utf8mb4
+    --skip-add-drop-table
+  )
+  if "$dump_bin" --help 2>/dev/null | grep -q -- '--column-statistics'; then
+    dump_args+=(--column-statistics=0)
+  fi
+  "$dump_bin" "${dump_args[@]}" "$NATIVE_DB_NAME"
   rm -f "$cnf"
 )
 

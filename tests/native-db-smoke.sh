@@ -21,11 +21,13 @@ printf '%s\n' '<?php' "\$table_prefix = 'wp_';" > "$ENV_TARGET/wp-config.php"
 
 printf '%s\n' '#!/usr/bin/env bash' \
   'set -euo pipefail' \
+  'if [[ "${1:-}" == "--help" ]]; then printf '\''  --column-statistics=#\n'\''; exit 0; fi' \
+  '[[ " $* " == *" --column-statistics=0 "* ]]' \
   '[[ "$*" != *target-secret* ]]' \
   'cnf="${1#--defaults-extra-file=}"' \
   'grep -q '\''password="target-secret"'\'' "$cnf"' \
   'grep -q '\''socket="/tmp/mysql.sock"'\'' "$cnf"' \
-  'printf '\''CREATE TABLE `backup_table` (`id` bigint);\n'\''' > "$FAKE_BIN/mariadb-dump"
+  'printf '\''CREATE TABLE `backup_table` (`id` bigint);\n'\''' > "$FAKE_BIN/mysqldump"
 
 printf '%s\n' '#!/usr/bin/env bash' \
   'set -euo pipefail' \
@@ -33,7 +35,7 @@ printf '%s\n' '#!/usr/bin/env bash' \
   'cnf="${1#--defaults-extra-file=}"' \
   'grep -q '\''password="target-secret"'\'' "$cnf"' \
   'grep -q '\''CREATE TABLE `wp_options`'\'' > "$NATIVE_IMPORT_MARKER"' > "$FAKE_BIN/mariadb"
-chmod +x "$FAKE_BIN/mariadb-dump" "$FAKE_BIN/mariadb"
+chmod +x "$FAKE_BIN/mysqldump" "$FAKE_BIN/mariadb"
 
 export TARGET_DB_PASSWORD="target-secret"
 export NATIVE_IMPORT_MARKER="$TEST_ROOT/imported"
