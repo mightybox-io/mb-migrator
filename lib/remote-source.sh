@@ -81,6 +81,15 @@ create_native_config() {
   } > "$cnf"
 }
 
+dump_supports_column_statistics() {
+  local dump_bin="$1" dump_help
+  dump_help="$("$dump_bin" --help 2>&1 || true)"
+  case "$dump_help" in
+    *--column-statistics*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 native_dump() (
   local dump_bin cnf
   local -a dump_args
@@ -99,7 +108,7 @@ native_dump() (
     --default-character-set=utf8mb4
     --skip-add-drop-table
   )
-  if "$dump_bin" --help 2>/dev/null | grep -q -- '--column-statistics'; then
+  if dump_supports_column_statistics "$dump_bin"; then
     dump_args+=(--column-statistics=0)
   fi
   "$dump_bin" "${dump_args[@]}" "$NATIVE_DB_NAME"
@@ -129,12 +138,20 @@ get_source_url() (
 )
 
 export_database() (
-  local dump_file
+  local dump_file wp_dump_bin=""
+  local -a wp_export_args
   dump_file="$(mktemp "${TMPDIR:-/tmp}/mb-migrator-export.sql.XXXXXX")"
   chmod 600 "$dump_file"
   trap 'rm -f "$dump_file"' EXIT
   if [[ "$db_method" != "native" ]] && command -v wp >/dev/null 2>&1; then
-    if wp --path="$source_root" --skip-plugins --skip-themes db export "$dump_file" --quiet >&2; then
+    wp_export_args=(--path="$source_root" --skip-plugins --skip-themes db export "$dump_file" --quiet)
+    if command -v mysqldump >/dev/null 2>&1; then
+      wp_dump_bin="$(command -v mysqldump)"
+      if dump_supports_column_statistics "$wp_dump_bin"; then
+        wp_export_args+=(--column-statistics=0)
+      fi
+    fi
+    if wp "${wp_export_args[@]}" >&2; then
       cat "$dump_file"
       return 0
     fi

@@ -338,7 +338,7 @@ push_site() (
   local transport="auto" selected_transport state_dir pair_dir key_file destination port ssh_dir work package
   local remote_output remote_dir remote_package remote_stage remote_runner remote_command import_command cleanup_command url_command login_command
   local repo ref arg option_name detected_url quoted_target source_url ssh_transport remote_prepare remote_rsync_path=""
-  local restore_arg_count=0
+  local restore_arg_count=0 cleanup_specified=no remote_cache_reused=0
   local -a restore_args ssh_args scp_args rsync_args
 
   state_dir="$(default_state_dir)"
@@ -353,6 +353,7 @@ push_site() (
       --new-url=*) new_url="${1#*=}"; restore_args+=("$1"); restore_arg_count=$((restore_arg_count + 1)) ;;
       --transport=*) transport="${1#*=}" ;;
       --state-dir=*) state_dir="${1#*=}" ;;
+      --cleanup=*) restore_args+=("$1"); restore_arg_count=$((restore_arg_count + 1)); cleanup_specified=yes ;;
       --help|-h) usage; exit 0 ;;
       --provider=*) die "push-site selects the wordpress-package provider automatically" ;;
       *) restore_args+=("$1"); restore_arg_count=$((restore_arg_count + 1)) ;;
@@ -469,10 +470,16 @@ push_site() (
 
   set_log_phase transfer
   log "Creating private incoming directory on destination"
-  remote_output="$(ssh "${ssh_args[@]}" "$destination" \
-    'umask 077; incoming="$HOME/.local/state/mb-migrator/incoming"; mkdir -p "$incoming"; chmod 700 "$HOME/.local/state" "$HOME/.local/state/mb-migrator" "$incoming" 2>/dev/null || true; dir="$(mktemp -d "$incoming/push.XXXXXX")"; printf "__MB_REMOTE_DIR__=%s\n" "$dir"')"
+  if [[ "$selected_transport" == "rsync" ]]; then
+    remote_output="$(ssh "${ssh_args[@]}" "$destination" \
+      "umask 077; incoming=\"\$HOME/.local/state/mb-migrator/incoming\"; mkdir -p \"\$incoming\"; chmod 700 \"\$HOME/.local/state\" \"\$HOME/.local/state/mb-migrator\" \"\$incoming\" 2>/dev/null || true; dir=\"\$incoming/rsync-$pairing_id\"; reused=0; [ ! -d \"\$dir/staged-site/htdocs\" ] || reused=1; mkdir -p \"\$dir\"; printf '__MB_REMOTE_DIR__=%s\\n__MB_CACHE_REUSED__=%s\\n' \"\$dir\" \"\$reused\"")"
+  else
+    remote_output="$(ssh "${ssh_args[@]}" "$destination" \
+      'umask 077; incoming="$HOME/.local/state/mb-migrator/incoming"; mkdir -p "$incoming"; chmod 700 "$HOME/.local/state" "$HOME/.local/state/mb-migrator" "$incoming" 2>/dev/null || true; dir="$(mktemp -d "$incoming/push.XXXXXX")"; printf "__MB_REMOTE_DIR__=%s\n" "$dir"')"
+  fi
   remote_dir="$(printf '%s\n' "$remote_output" | tr -d '\r' | awk -F= '/^__MB_REMOTE_DIR__=/{value=$2} END{print value}')"
-  [[ "$remote_dir" =~ ^/[A-Za-z0-9._/-]+/\.local/state/mb-migrator/incoming/push\.[A-Za-z0-9]+$ ]] ||
+  remote_cache_reused="$(printf '%s\n' "$remote_output" | tr -d '\r' | awk -F= '/^__MB_CACHE_REUSED__=/{value=$2} END{print value}')"
+  [[ "$remote_dir" =~ ^/[A-Za-z0-9._/-]+/\.local/state/mb-migrator/incoming/(push\.[A-Za-z0-9]+|rsync-[a-f0-9]{20})$ ]] ||
     die "Destination returned an unsafe incoming path"
   remote_package="$remote_dir/wordpress-package.tar.gz"
   remote_stage="$remote_dir/staged-site"
@@ -486,6 +493,11 @@ push_site() (
   need_cmd scp
   if [[ "$selected_transport" == "rsync" ]]; then
     log "Transport: direct rsync over SSH"
+    if [[ "$remote_cache_reused" == "1" ]]; then
+      log "Reusing persistent destination cache; unchanged files will not be retransferred"
+    else
+      log "Initialized persistent destination cache for incremental retries"
+    fi
     set_log_phase preflight
     log "Preflighting WordPress source"
     bash "$ROOT_DIR/lib/remote-source.sh" preflight "$source_root" "$source_db_method"
@@ -505,9 +517,9 @@ push_site() (
 
     set_log_phase files
     log "Rsync pass 1 of 2: WordPress files"
-    run_live_rsync "${rsync_args[@]}" -e "$ssh_transport" \
+    run_live_rsync "${rsync_args[@]}" "--link-dest=$target_root/wp-content" -e "$ssh_transport" \
       "$source_root/wp-content/" "$destination:$remote_stage/htdocs/wp-content/"
-    run_live_rsync "${rsync_args[@]}" -e "$ssh_transport" \
+    run_live_rsync "${rsync_args[@]}" "--link-dest=$target_root" -e "$ssh_transport" \
       --exclude='*/' \
       --exclude='index.php' \
       --exclude='license.txt' \
@@ -518,9 +530,9 @@ push_site() (
       "$source_root/" "$destination:$remote_stage/htdocs/"
 
     log "Rsync pass 2 of 2: catching files changed during the first pass"
-    run_live_rsync "${rsync_args[@]}" -e "$ssh_transport" \
+    run_live_rsync "${rsync_args[@]}" "--link-dest=$target_root/wp-content" -e "$ssh_transport" \
       "$source_root/wp-content/" "$destination:$remote_stage/htdocs/wp-content/"
-    run_live_rsync "${rsync_args[@]}" -e "$ssh_transport" \
+    run_live_rsync "${rsync_args[@]}" "--link-dest=$target_root" -e "$ssh_transport" \
       --exclude='*/' \
       --exclude='index.php' \
       --exclude='license.txt' \
@@ -571,6 +583,10 @@ push_site() (
     append_shell_arg import_command "$remote_package"
   fi
 
+  if [[ "$selected_transport" == "rsync" && "$cleanup_specified" == "no" ]]; then
+    restore_args+=("--cleanup=no")
+    restore_arg_count=$((restore_arg_count + 1))
+  fi
   if [[ "$restore_arg_count" -gt 0 ]]; then
     for arg in "${restore_args[@]}"; do append_shell_arg import_command "$arg"; done
   fi

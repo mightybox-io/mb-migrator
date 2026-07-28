@@ -69,6 +69,15 @@ native_db_client_binary() {
   else return 1; fi
 }
 
+native_dump_supports_column_statistics() {
+  local dump_bin="$1" dump_help
+  dump_help="$("$dump_bin" --help 2>&1 || true)"
+  case "$dump_help" in
+    *--column-statistics*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 native_db_backup() (
   local target_root="$1" backup="$2" cnf dump_bin
   local -a dump_args
@@ -85,7 +94,7 @@ native_db_backup() (
     --hex-blob
     --default-character-set=utf8mb4
   )
-  if "$dump_bin" --help 2>/dev/null | grep -q -- '--column-statistics'; then
+  if native_dump_supports_column_statistics "$dump_bin"; then
     dump_args+=(--column-statistics=0)
   fi
   if ! "$dump_bin" "${dump_args[@]}" "$NATIVE_DB_NAME" > "$backup"; then

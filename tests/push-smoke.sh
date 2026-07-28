@@ -22,6 +22,7 @@ printf '%s\n' '#!/usr/bin/env bash' \
   '  *"__MB_TARGET_ROOT__"*) printf '\''__MB_TARGET_ROOT__=/srv/htdocs\n'\'' ;;' \
   '  *"option"*get*siteurl*) printf '\''%s\n'\'' "$command_text" > "$PUSH_URL_MARKER"; printf '\''https://destination-push.example.test\n'\'' ;;' \
   '  *"option"*get*home*) exit 1 ;;' \
+  '  *"rsync-"*"__MB_REMOTE_DIR__"*) if [[ "$command_text" =~ rsync-([a-f0-9]{20}) ]]; then pairing="${BASH_REMATCH[1]}"; else exit 1; fi; reused=0; [[ ! -e "$PUSH_REMOTE_CACHE_MARKER" ]] || reused=1; : > "$PUSH_REMOTE_CACHE_MARKER"; printf '\''__MB_REMOTE_DIR__=/home/destination/.local/state/mb-migrator/incoming/rsync-%s\n__MB_CACHE_REUSED__=%s\n'\'' "$pairing" "$reused" ;;' \
   '  *"__MB_REMOTE_DIR__"*) printf '\''__MB_REMOTE_DIR__=/home/destination/.local/state/mb-migrator/incoming/push.test123\n'\'' ;;' \
   '  *"mkdir -p"*"staged-site"*) exit 0 ;;' \
   '  *"database-package/site.sql"*) cat > "$PUSH_DB_MARKER" ;;' \
@@ -66,6 +67,7 @@ export PUSH_SCP_MARKER="$TEST_ROOT/scp-command"
 export PUSH_RSYNC_MARKER="$TEST_ROOT/rsync-command"
 export PUSH_DB_MARKER="$TEST_ROOT/streamed-db.sql"
 export PUSH_URL_MARKER="$TEST_ROOT/url-command"
+export PUSH_REMOTE_CACHE_MARKER="$TEST_ROOT/remote-cache"
 export MB_MIGRATOR_SSH_DIR="$TEST_ROOT/ssh"
 
 prepare_output="$(PATH="$FAKE_BIN:$PATH" "$ROOT_DIR/bin/mb-migrator" push-pair prepare "--state-dir=$STATE_DIR")"
@@ -101,8 +103,10 @@ test -s "$PUSH_IMPORT_MARKER"
 test -s "$PUSH_CLEANUP_MARKER"
 grep -q 'import-staged' "$PUSH_IMPORT_MARKER"
 grep -q 'staged-site' "$PUSH_IMPORT_MARKER"
+grep -q "rsync-$pairing_id/staged-site" "$PUSH_IMPORT_MARKER"
 [[ "$(wc -l < "$PUSH_RSYNC_MARKER")" -eq 4 ]]
 grep -q -- '--info=progress2' "$PUSH_RSYNC_MARKER"
+grep -q -- '--link-dest=/srv/htdocs/wp-content' "$PUSH_RSYNC_MARKER"
 grep -q 'cd' "$PUSH_URL_MARKER"
 grep -q 'siteurl' "$PUSH_URL_MARKER"
 grep -q -- '--target-root=/srv/htdocs' "$PUSH_IMPORT_MARKER"

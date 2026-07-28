@@ -39,7 +39,7 @@ cp "$TARGET/wp-config.php" "$STAGED_TARGET/wp-config.php"
 
 printf '%s\n' '#!/usr/bin/env bash' \
   'set -euo pipefail' \
-  'if [[ "${1:-}" == "--help" ]]; then printf '\''  --column-statistics=#\n'\''; exit 0; fi' \
+  'if [[ "${1:-}" == "--help" ]]; then printf '\''  --column-statistics=#\n'\''; for ((i=0; i<5000; i++)); do printf '\''help padding %s\n'\'' "$i"; done; exit 0; fi' \
   '[[ " $* " == *" --column-statistics=0 "* ]]' \
   'cnf="${1#--defaults-extra-file=}"' \
   'grep -q '\''password="package-secret"'\'' "$cnf"' \
