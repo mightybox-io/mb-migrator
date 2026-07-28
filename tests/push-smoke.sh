@@ -25,6 +25,7 @@ printf '%s\n' '#!/usr/bin/env bash' \
   '  *"rsync-"*"__MB_REMOTE_DIR__"*) if [[ "$command_text" =~ rsync-([a-f0-9]{20}) ]]; then pairing="${BASH_REMATCH[1]}"; else exit 1; fi; reused=0; [[ ! -e "$PUSH_REMOTE_CACHE_MARKER" ]] || reused=1; : > "$PUSH_REMOTE_CACHE_MARKER"; printf '\''__MB_REMOTE_DIR__=/home/destination/.local/state/mb-migrator/incoming/rsync-%s\n__MB_CACHE_REUSED__=%s\n'\'' "$pairing" "$reused" ;;' \
   '  *"__MB_REMOTE_DIR__"*) printf '\''__MB_REMOTE_DIR__=/home/destination/.local/state/mb-migrator/incoming/push.test123\n'\'' ;;' \
   '  *"mkdir -p"*"staged-site"*) exit 0 ;;' \
+  '  *"df -Pk"*) printf '\''__MB_FREE_KB__=10485760\n'\'' ;;' \
   '  *"database-package/site.sql"*) cat > "$PUSH_DB_MARKER" ;;' \
   '  *"rm -f"*) printf '\''%s\n'\'' "$command_text" > "$PUSH_CLEANUP_MARKER" ;;' \
   '  *"remote-run.sh"*) printf '\''%s\n'\'' "$command_text" > "$PUSH_IMPORT_MARKER" ;;' \
@@ -38,7 +39,8 @@ printf '%s\n' '#!/usr/bin/env bash' \
 printf '%s\n' '#!/usr/bin/env bash' \
   'set -euo pipefail' \
   'if [[ "${1:-}" == "--info=help" ]]; then printf '\''progress2\n'\''; exit 0; fi' \
-  'printf '\''%s\n'\'' "$*" >> "$PUSH_RSYNC_MARKER"' > "$FAKE_BIN/rsync"
+  'printf '\''%s\n'\'' "$*" >> "$PUSH_RSYNC_MARKER"' \
+  'if [[ ! -e "$PUSH_RSYNC_RETRY_MARKER" ]]; then : > "$PUSH_RSYNC_RETRY_MARKER"; printf '\''simulated broken pipe\n'\'' >&2; exit 12; fi' > "$FAKE_BIN/rsync"
 
 printf '%s\n' '#!/usr/bin/env bash' \
   'set -euo pipefail' \
@@ -68,6 +70,7 @@ export PUSH_RSYNC_MARKER="$TEST_ROOT/rsync-command"
 export PUSH_DB_MARKER="$TEST_ROOT/streamed-db.sql"
 export PUSH_URL_MARKER="$TEST_ROOT/url-command"
 export PUSH_REMOTE_CACHE_MARKER="$TEST_ROOT/remote-cache"
+export PUSH_RSYNC_RETRY_MARKER="$TEST_ROOT/rsync-retried"
 export MB_MIGRATOR_SSH_DIR="$TEST_ROOT/ssh"
 
 prepare_output="$(PATH="$FAKE_BIN:$PATH" "$ROOT_DIR/bin/mb-migrator" push-pair prepare "--state-dir=$STATE_DIR")"
@@ -104,9 +107,11 @@ test -s "$PUSH_CLEANUP_MARKER"
 grep -q 'import-staged' "$PUSH_IMPORT_MARKER"
 grep -q 'staged-site' "$PUSH_IMPORT_MARKER"
 grep -q "rsync-$pairing_id/staged-site" "$PUSH_IMPORT_MARKER"
-[[ "$(wc -l < "$PUSH_RSYNC_MARKER")" -eq 4 ]]
+[[ "$(wc -l < "$PUSH_RSYNC_MARKER")" -eq 5 ]]
 grep -q -- '--info=progress2' "$PUSH_RSYNC_MARKER"
 grep -q -- '--link-dest=/srv/htdocs/wp-content' "$PUSH_RSYNC_MARKER"
+grep -q -- '--partial-dir=.mb-migrator-partial' "$PUSH_RSYNC_MARKER"
+grep -q -- '--timeout=120' "$PUSH_RSYNC_MARKER"
 grep -q 'cd' "$PUSH_URL_MARKER"
 grep -q 'siteurl' "$PUSH_URL_MARKER"
 grep -q -- '--target-root=/srv/htdocs' "$PUSH_IMPORT_MARKER"

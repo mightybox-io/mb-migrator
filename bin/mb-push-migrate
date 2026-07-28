@@ -324,13 +324,50 @@ append_shell_arg() {
 }
 
 run_live_rsync() {
-  local status=0
-  rsync "$@" || status=$?
-  if [[ "$status" -eq 24 ]]; then
-    warn "Some source files vanished during rsync; continuing to the catch-up pass"
-    return 0
-  fi
-  return "$status"
+  local status=0 attempt=1 max_attempts="${RSYNC_MAX_ATTEMPTS:-4}" delay
+  while :; do
+    status=0
+    rsync "$@" || status=$?
+    case "$status" in
+      0) return 0 ;;
+      24)
+        warn "Some source files vanished during rsync; continuing to the catch-up pass"
+        return 0
+        ;;
+      10|11|12|30|35|255)
+        if [[ "$attempt" -lt "$max_attempts" ]]; then
+          delay=$((attempt * 2))
+          warn "File-transfer connection was interrupted (rsync exit $status). Cached progress is safe; reconnecting in ${delay}s (attempt $((attempt + 1))/$max_attempts)"
+          sleep "$delay"
+          attempt=$((attempt + 1))
+          continue
+        fi
+        warn "File transfer still failed after $max_attempts attempts (rsync exit $status)"
+        warn "Already received files remain cached. Check destination disk/quota and SSH stability, then rerun 'push'; unchanged files will be skipped"
+        ;;
+      *)
+        warn "Rsync stopped with exit $status. Cached files remain available for the next run"
+        ;;
+    esac
+    return "$status"
+  done
+}
+
+run_live_scp() {
+  local status=0 attempt=1 max_attempts="${SCP_MAX_ATTEMPTS:-3}" delay
+  while :; do
+    status=0
+    scp "$@" || status=$?
+    [[ "$status" -ne 0 ]] || return 0
+    if [[ "$attempt" -ge "$max_attempts" ]]; then
+      warn "Small-file transfer failed after $max_attempts attempts (scp exit $status)"
+      return "$status"
+    fi
+    delay=$((attempt * 2))
+    warn "Small-file transfer was interrupted; reconnecting in ${delay}s (attempt $((attempt + 1))/$max_attempts)"
+    sleep "$delay"
+    attempt=$((attempt + 1))
+  done
 }
 
 push_site() (
@@ -339,7 +376,8 @@ push_site() (
   local remote_output remote_dir remote_package remote_stage remote_runner remote_command import_command cleanup_command url_command login_command
   local repo ref arg option_name detected_url quoted_target source_url ssh_transport remote_prepare remote_rsync_path=""
   local restore_arg_count=0 cleanup_specified=no remote_cache_reused=0
-  local -a restore_args ssh_args scp_args rsync_args
+  local db_attempt db_dump_status db_ssh_status destination_free_kb source_content_kb
+  local -a restore_args ssh_args scp_args rsync_args pipeline_status
 
   state_dir="$(default_state_dir)"
   set_log_context push setup
@@ -390,8 +428,8 @@ push_site() (
   [[ -f "$ssh_dir/known_hosts" ]] || die "SSH known_hosts file is missing; rerun push-pair complete"
 
   need_cmd ssh
-  ssh_args=(-p "$port" -i "$key_file" -o BatchMode=yes -o IdentitiesOnly=yes -o "UserKnownHostsFile=$ssh_dir/known_hosts")
-  scp_args=(-P "$port" -i "$key_file" -o BatchMode=yes -o IdentitiesOnly=yes -o "UserKnownHostsFile=$ssh_dir/known_hosts")
+  ssh_args=(-p "$port" -i "$key_file" -o BatchMode=yes -o IdentitiesOnly=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=8 -o TCPKeepAlive=yes -o ConnectTimeout=20 -o "UserKnownHostsFile=$ssh_dir/known_hosts")
+  scp_args=(-P "$port" -i "$key_file" -o BatchMode=yes -o IdentitiesOnly=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=8 -o TCPKeepAlive=yes -o ConnectTimeout=20 -o "UserKnownHostsFile=$ssh_dir/known_hosts")
   set_log_phase connect
   log "Verifying saved SSH pairing"
   ssh "${ssh_args[@]}" "$destination" true || die "Saved SSH pairing could not connect"
@@ -506,9 +544,19 @@ push_site() (
       "$remote_stage" "$remote_stage/htdocs" "$remote_stage/database-package"
     ssh "${ssh_args[@]}" "$destination" "$remote_prepare"
 
-    printf -v ssh_transport 'ssh -p %q -i %q -o BatchMode=yes -o IdentitiesOnly=yes -o UserKnownHostsFile=%q' \
+    remote_output="$(ssh "${ssh_args[@]}" "$destination" "df -Pk '$remote_stage' 2>/dev/null | awk 'NR==2 {print \"__MB_FREE_KB__=\" \$4}'")"
+    destination_free_kb="$(printf '%s\n' "$remote_output" | tr -d '\r' | awk -F= '/^__MB_FREE_KB__=/{value=$2} END{print value}')"
+    source_content_kb="$(du -sk "$source_root/wp-content" 2>/dev/null | awk 'NR==1{print $1}')"
+    if [[ "$destination_free_kb" =~ ^[0-9]+$ && "$source_content_kb" =~ ^[0-9]+$ ]]; then
+      log "Capacity check: source wp-content is approximately $((source_content_kb / 1024)) MiB; destination cache has $((destination_free_kb / 1024)) MiB free"
+      if [[ "$destination_free_kb" -lt "$source_content_kb" ]]; then
+        warn "Destination free space is smaller than the source wp-content size; link reuse may still make it fit, but quota should be watched"
+      fi
+    fi
+
+    printf -v ssh_transport 'ssh -p %q -i %q -o BatchMode=yes -o IdentitiesOnly=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=8 -o TCPKeepAlive=yes -o ConnectTimeout=20 -o UserKnownHostsFile=%q' \
       "$port" "$key_file" "$ssh_dir/known_hosts"
-    rsync_args=(-az --partial --no-perms --no-owner --no-group --omit-dir-times "--rsync-path=$remote_rsync_path")
+    rsync_args=(-az --partial --partial-dir=.mb-migrator-partial --timeout=120 --no-perms --no-owner --no-group --omit-dir-times "--rsync-path=$remote_rsync_path")
     if rsync --info=help 2>&1 | grep -q 'progress2'; then
       rsync_args+=(--human-readable --info=progress2)
     else
@@ -543,10 +591,30 @@ push_site() (
       "$source_root/" "$destination:$remote_stage/htdocs/"
 
     set_log_phase database
-    log "Streaming fresh database export to destination"
-    bash "$ROOT_DIR/lib/remote-source.sh" export-db "$source_root" "$source_db_method" |
-      ssh "${ssh_args[@]}" "$destination" \
-        "umask 077; cat > '$remote_stage/database-package/site.sql'"
+    db_attempt=1
+    while :; do
+      log "Streaming fresh database export to destination (attempt $db_attempt/3)"
+      set +e
+      bash "$ROOT_DIR/lib/remote-source.sh" export-db "$source_root" "$source_db_method" |
+        ssh "${ssh_args[@]}" "$destination" \
+          "umask 077; output='$remote_stage/database-package/site.sql'; temp=\"\$output.partial\"; cat > \"\$temp\" && mv \"\$temp\" \"\$output\""
+      pipeline_status=("${PIPESTATUS[@]}")
+      set -e
+      db_dump_status="${pipeline_status[0]}"
+      db_ssh_status="${pipeline_status[1]}"
+      if [[ "$db_dump_status" -eq 0 && "$db_ssh_status" -eq 0 ]]; then
+        break
+      fi
+      if [[ "$db_dump_status" -ne 0 ]]; then
+        die "Source database export failed (exit $db_dump_status). The file cache is safe; fix the database error and rerun 'push'"
+      fi
+      if [[ "$db_attempt" -ge 3 ]]; then
+        die "Database stream could not stay connected after 3 attempts (SSH exit $db_ssh_status). The file cache is safe; rerun 'push' when SSH is stable"
+      fi
+      warn "Database stream was interrupted (SSH exit $db_ssh_status); restarting the fresh export"
+      sleep $((db_attempt * 2))
+      db_attempt=$((db_attempt + 1))
+    done
 
     source_url="$(bash "$ROOT_DIR/lib/remote-source.sh" get-url "$source_root" "$source_db_method" 2>/dev/null || true)"
     [[ "$source_url" != *$'\n'* && "$source_url" != *$'\r'* ]] ||
@@ -561,9 +629,9 @@ push_site() (
 
     set_log_phase transfer
     log "Transferring migration metadata and runner"
-    scp "${scp_args[@]}" "$work/mb-wordpress-package-manifest" \
+    run_live_scp "${scp_args[@]}" "$work/mb-wordpress-package-manifest" \
       "$destination:$remote_stage/mb-wordpress-package-manifest"
-    scp "${scp_args[@]}" "$ROOT_DIR/remote-run.sh" "$destination:$remote_runner"
+    run_live_scp "${scp_args[@]}" "$ROOT_DIR/remote-run.sh" "$destination:$remote_runner"
 
     printf -v import_command 'MB_MIGRATOR_REPO=%q MB_MIGRATOR_REF=%q bash %q' "$repo" "$ref" "$remote_runner"
     append_shell_arg import_command import-staged
@@ -577,7 +645,7 @@ push_site() (
       "--output=$package" \
       "--db-method=$source_db_method"
     log "Transferring package, checksum, and migration runner over SSH"
-    scp "${scp_args[@]}" "$package" "$package.sha256" "$ROOT_DIR/remote-run.sh" "$destination:$remote_dir/"
+    run_live_scp "${scp_args[@]}" "$package" "$package.sha256" "$ROOT_DIR/remote-run.sh" "$destination:$remote_dir/"
     printf -v import_command 'MB_MIGRATOR_REPO=%q MB_MIGRATOR_REF=%q bash %q' "$repo" "$ref" "$remote_runner"
     append_shell_arg import_command import-site
     append_shell_arg import_command "$remote_package"
