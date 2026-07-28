@@ -131,7 +131,12 @@ grep -q 'wordpress-package.tar.gz.sha256' "$PUSH_SCP_MARKER"
 
 GUIDED_STATE="$TEST_ROOT/guided-state"
 : > "$PUSH_RSYNC_MARKER"
-printf 'OK\nguideduser@guided.example.test\n3022\n' |
+guided_prepare_output="$(PATH="$FAKE_BIN:$PATH" "$ROOT_DIR/bin/mb-migrator" push-pair prepare "--state-dir=$GUIDED_STATE")"
+guided_pending_id="$(printf '%s\n' "$guided_prepare_output" | awk -F': ' '/Pairing ID:/{print $2; exit}')"
+[[ "$guided_pending_id" =~ ^[a-f0-9]{20}$ ]]
+export PUSH_SCAN_KEY="$GUIDED_STATE/push-pairings/$guided_pending_id/id_ed25519.pub"
+
+printf '\nguideduser@guided.example.test\n3022\n' |
   PATH="$FAKE_BIN:$PATH" "$ROOT_DIR/bin/mb-migrator" push \
     "--state-dir=$GUIDED_STATE" \
     "--source-root=$SOURCE" \
@@ -148,6 +153,8 @@ printf 'OK\nguideduser@guided.example.test\n3022\n' |
 
 guided_pairing_id="$(<"$GUIDED_STATE/push-pairings/current-pairing")"
 [[ "$guided_pairing_id" =~ ^[a-f0-9]{20}$ ]]
+[[ "$guided_pairing_id" == "$guided_pending_id" ]]
+[[ ! -e "$GUIDED_STATE/push-pairings/pending-pairing" ]]
 [[ "$(<"$GUIDED_STATE/push-pairings/$guided_pairing_id/destination")" == "guideduser@guided.example.test" ]]
 [[ "$(<"$GUIDED_STATE/push-pairings/$guided_pairing_id/port")" == "3022" ]]
 grep -q 'import-staged' "$PUSH_IMPORT_MARKER"

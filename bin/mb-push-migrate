@@ -123,7 +123,7 @@ prepare_pairing() (
 
 complete_pairing() {
   local pairing_id="${1:-}" destination="${2:-}" state_dir port pair_dir key_file ssh_dir
-  local host host_lookup strict_policy scan_file
+  local host host_lookup strict_policy scan_file pending_file pending_id
   [[ -n "$pairing_id" && -n "$destination" ]] || die "push-pair complete requires PAIRING_ID and USER@HOST"
   set_log_context pairing connect
   shift 2
@@ -187,6 +187,11 @@ complete_pairing() {
   chmod 600 "$pair_dir/destination" "$pair_dir/port"
   printf '%s\n' "$pairing_id" > "$state_dir/push-pairings/current-pairing"
   chmod 600 "$state_dir/push-pairings/current-pairing"
+  pending_file="$state_dir/push-pairings/pending-pairing"
+  if [[ -r "$pending_file" ]]; then
+    pending_id="$(<"$pending_file")"
+    [[ "$pending_id" != "$pairing_id" ]] || rm -f "$pending_file"
+  fi
   log "Push pairing verified: $pairing_id"
   log "Destination: $destination (port $port)"
 }
@@ -205,7 +210,7 @@ prompt_value() {
 
 guided_push() (
   local state_dir destination="" port="" source_root="" source_db_method="auto"
-  local target_db_method="auto" pairing_id confirmation arg
+  local target_db_method="auto" pairing_id confirmation arg pairing_root pair_dir public_key
   local -a push_args restore_args
 
   state_dir="$(default_state_dir)"
@@ -227,16 +232,32 @@ guided_push() (
   done
 
   state_dir="$(abs_path_for_create "$state_dir")"
-  prepare_pairing "--state-dir=$state_dir" --guided
-  pairing_id="$(<"$state_dir/push-pairings/pending-pairing")"
-  validate_pairing_id "$pairing_id"
+  pairing_root="$state_dir/push-pairings"
+  pairing_id=""
+  if [[ -r "$pairing_root/pending-pairing" ]]; then
+    pairing_id="$(<"$pairing_root/pending-pairing")"
+    validate_pairing_id "$pairing_id"
+    pair_dir="$(pairing_dir "$state_dir" "$pairing_id")"
+    if [[ ! -f "$pair_dir/id_ed25519" || ! -f "$pair_dir/id_ed25519.pub" ||
+      ( -f "$pair_dir/destination" && -f "$pair_dir/port" ) ]]; then
+      pairing_id=""
+    fi
+  fi
+  if [[ -n "$pairing_id" ]]; then
+    public_key="$(<"$pair_dir/id_ed25519.pub")"
+    log "Resuming pending pairing: $pairing_id"
+    printf '\nInstall this PUBLIC key on the new SSH account:\n\n%s\n\n' "$public_key"
+    printf 'Create or open the destination SSH account and add that public key.\n'
+  else
+    prepare_pairing "--state-dir=$state_dir" --guided
+    pairing_id="$(<"$pairing_root/pending-pairing")"
+    validate_pairing_id "$pairing_id"
+  fi
 
   printf '\n'
-  prompt_value confirmation "When the public key is installed, type OK to continue"
-  case "$confirmation" in
-    [Oo][Kk]) ;;
-    *) die "Pairing was not confirmed. Rerun push-pair complete with pairing ID $pairing_id when ready" ;;
-  esac
+  printf '[%s:prompt] Press Enter to continue after the public key is installed: ' "$(log_prefix)" >&2
+  IFS= read -r confirmation ||
+    die "Input ended before the guided migration was complete"
   if [[ -z "$destination" ]]; then
     prompt_value destination "Destination SSH login (USER@HOST)"
   fi

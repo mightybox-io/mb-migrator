@@ -94,7 +94,7 @@ The wizard:
 
 1. Creates a private migration key on the old host and prints only its public key.
 2. Pauses while you create or open the destination SSH account and install the public key.
-3. Asks you to type `OK`, then asks for the destination `USER@HOST` and SSH port.
+3. Waits for you to press Enter, then asks for the destination `USER@HOST` and SSH port.
 4. Verifies and saves the pairing without asking you to copy a pairing ID.
 5. Uses `/var/www/webroot/ROOT` as the source when it exists, discovers the destination WordPress root and URL, and begins the migration.
 
@@ -139,6 +139,8 @@ mb-migrator push-site --pairing=PAIRING_ID --source-root=/var/www/webroot/ROOT
 ```
 
 Running `mb-migrator push-pair` without `prepare` or `complete` is also an alias for the guided `push` flow.
+If the wizard is interrupted before SSH verification, rerunning `push` resumes
+the pending key instead of generating a replacement.
 
 ## Live Legacy MightyBox Migration
 
