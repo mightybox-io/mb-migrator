@@ -141,6 +141,9 @@ mb-migrator push-site --pairing=PAIRING_ID --source-root=/var/www/webroot/ROOT
 Running `mb-migrator push-pair` without `prepare` or `complete` is also an alias for the guided `push` flow.
 If the wizard is interrupted before SSH verification, rerunning `push` resumes
 the pending key instead of generating a replacement.
+If pairing succeeded but the migration was interrupted, rerunning `push`
+continues with that verified pairing. Pass `--new-pairing` only when you
+intentionally want to connect a different destination account.
 
 ## Live Legacy MightyBox Migration
 

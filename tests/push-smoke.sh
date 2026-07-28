@@ -159,4 +159,11 @@ guided_pairing_id="$(<"$GUIDED_STATE/push-pairings/current-pairing")"
 [[ "$(<"$GUIDED_STATE/push-pairings/$guided_pairing_id/port")" == "3022" ]]
 grep -q 'import-staged' "$PUSH_IMPORT_MARKER"
 
+PATH="$FAKE_BIN:$PATH" "$ROOT_DIR/bin/mb-migrator" push \
+  "--state-dir=$GUIDED_STATE" \
+  "--source-root=$SOURCE" \
+  --source-db-method=native \
+  --target-db-method=native
+[[ "$(<"$GUIDED_STATE/push-pairings/current-pairing")" == "$guided_pairing_id" ]]
+
 printf 'outbound push smoke test passed\n'

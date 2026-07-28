@@ -30,6 +30,7 @@ printed by `push-pair prepare` on the destination SSH account.
 Guided/push options:
   --destination=USER@HOST              Skip the destination login prompt
   --port=22                            Default: prompt with 22 as the default
+  --new-pairing                        Ignore a saved current pairing
   --pairing=PAIRING_ID                 Default: saved current pairing
   --source-root=PATH                   Default: /var/www/webroot/ROOT
   --source-db-method=auto|wp-cli|native
@@ -211,6 +212,7 @@ prompt_value() {
 guided_push() (
   local state_dir destination="" port="" source_root="" source_db_method="auto"
   local target_db_method="auto" pairing_id confirmation arg pairing_root pair_dir public_key
+  local new_pairing="no" pairing_verified="no" restore_arg_count=0
   local -a push_args restore_args
 
   state_dir="$(default_state_dir)"
@@ -224,9 +226,10 @@ guided_push() (
       --source-root=*) source_root="${1#*=}" ;;
       --source-db-method=*) source_db_method="${1#*=}" ;;
       --target-db-method=*) target_db_method="${1#*=}" ;;
+      --new-pairing) new_pairing=yes ;;
       --pairing=*) die "The guided flow creates a new pairing; use push-site to reuse one" ;;
       --help|-h) usage; exit 0 ;;
-      *) restore_args+=("$1") ;;
+      *) restore_args+=("$1"); restore_arg_count=$((restore_arg_count + 1)) ;;
     esac
     shift
   done
@@ -234,7 +237,7 @@ guided_push() (
   state_dir="$(abs_path_for_create "$state_dir")"
   pairing_root="$state_dir/push-pairings"
   pairing_id=""
-  if [[ -r "$pairing_root/pending-pairing" ]]; then
+  if [[ "$new_pairing" == "no" && -r "$pairing_root/pending-pairing" ]]; then
     pairing_id="$(<"$pairing_root/pending-pairing")"
     validate_pairing_id "$pairing_id"
     pair_dir="$(pairing_dir "$state_dir" "$pairing_id")"
@@ -243,29 +246,49 @@ guided_push() (
       pairing_id=""
     fi
   fi
-  if [[ -n "$pairing_id" ]]; then
-    public_key="$(<"$pair_dir/id_ed25519.pub")"
-    log "Resuming pending pairing: $pairing_id"
-    printf '\nInstall this PUBLIC key on the new SSH account:\n\n%s\n\n' "$public_key"
-    printf 'Create or open the destination SSH account and add that public key.\n'
-  else
-    prepare_pairing "--state-dir=$state_dir" --guided
-    pairing_id="$(<"$pairing_root/pending-pairing")"
+  if [[ -z "$pairing_id" && "$new_pairing" == "no" &&
+    -z "$destination" && -z "$port" && -r "$pairing_root/current-pairing" ]]; then
+    pairing_id="$(<"$pairing_root/current-pairing")"
     validate_pairing_id "$pairing_id"
+    pair_dir="$(pairing_dir "$state_dir" "$pairing_id")"
+    if [[ -f "$pair_dir/id_ed25519" && -f "$pair_dir/destination" && -f "$pair_dir/port" ]]; then
+      destination="$(<"$pair_dir/destination")"
+      port="$(<"$pair_dir/port")"
+      validate_destination "$destination"
+      validate_port "$port"
+      pairing_verified=yes
+      log "Continuing with verified pairing: $destination (port $port)"
+    else
+      pairing_id=""
+    fi
+  fi
+  if [[ "$pairing_verified" == "no" ]]; then
+    if [[ -n "$pairing_id" ]]; then
+      public_key="$(<"$pair_dir/id_ed25519.pub")"
+      log "Resuming pending pairing: $pairing_id"
+      printf '\nInstall this PUBLIC key on the new SSH account:\n\n%s\n\n' "$public_key"
+      printf 'Create or open the destination SSH account and add that public key.\n'
+    else
+      prepare_pairing "--state-dir=$state_dir" --guided
+      pairing_id="$(<"$pairing_root/pending-pairing")"
+      validate_pairing_id "$pairing_id"
+    fi
   fi
 
-  printf '\n'
-  printf '[%s:prompt] Press Enter to continue after the public key is installed: ' "$(log_prefix)" >&2
-  IFS= read -r confirmation ||
-    die "Input ended before the guided migration was complete"
-  if [[ -z "$destination" ]]; then
-    prompt_value destination "Destination SSH login (USER@HOST)"
+  if [[ "$pairing_verified" == "no" ]]; then
+    printf '\n'
+    printf '[%s:prompt] Press Enter to continue after the public key is installed: ' "$(log_prefix)" >&2
+    IFS= read -r confirmation ||
+      die "Input ended before the guided migration was complete"
+    if [[ -z "$destination" ]]; then
+      prompt_value destination "Destination SSH login (USER@HOST)"
+    fi
+    if [[ -z "$port" ]]; then
+      prompt_value port "Destination SSH port" "22"
+    fi
+    validate_destination "$destination"
+    validate_port "$port"
   fi
-  if [[ -z "$port" ]]; then
-    prompt_value port "Destination SSH port" "22"
-  fi
-  validate_destination "$destination"
-  validate_port "$port"
 
   if [[ -z "$source_root" ]]; then
     if [[ -d /var/www/webroot/ROOT ]]; then
@@ -278,7 +301,9 @@ guided_push() (
     fi
   fi
 
-  complete_pairing "$pairing_id" "$destination" "--port=$port" "--state-dir=$state_dir"
+  if [[ "$pairing_verified" == "no" ]]; then
+    complete_pairing "$pairing_id" "$destination" "--port=$port" "--state-dir=$state_dir"
+  fi
   push_args=(
     "--pairing=$pairing_id"
     "--state-dir=$state_dir"
@@ -286,7 +311,9 @@ guided_push() (
     "--source-db-method=$source_db_method"
     "--target-db-method=$target_db_method"
   )
-  for arg in "${restore_args[@]}"; do push_args+=("$arg"); done
+  if [[ "$restore_arg_count" -gt 0 ]]; then
+    for arg in "${restore_args[@]}"; do push_args+=("$arg"); done
+  fi
   push_site "${push_args[@]}"
 )
 
@@ -311,6 +338,7 @@ push_site() (
   local transport="auto" selected_transport state_dir pair_dir key_file destination port ssh_dir work package
   local remote_output remote_dir remote_package remote_stage remote_runner remote_command import_command cleanup_command url_command login_command
   local repo ref arg option_name detected_url quoted_target source_url ssh_transport remote_prepare remote_rsync_path=""
+  local restore_arg_count=0
   local -a restore_args ssh_args scp_args rsync_args
 
   state_dir="$(default_state_dir)"
@@ -321,13 +349,13 @@ push_site() (
       --pairing=*) pairing_id="${1#*=}" ;;
       --source-root=*) source_root="${1#*=}" ;;
       --source-db-method=*) source_db_method="${1#*=}" ;;
-      --target-root=*) target_root="${1#*=}"; restore_args+=("$1") ;;
-      --new-url=*) new_url="${1#*=}"; restore_args+=("$1") ;;
+      --target-root=*) target_root="${1#*=}"; restore_args+=("$1"); restore_arg_count=$((restore_arg_count + 1)) ;;
+      --new-url=*) new_url="${1#*=}"; restore_args+=("$1"); restore_arg_count=$((restore_arg_count + 1)) ;;
       --transport=*) transport="${1#*=}" ;;
       --state-dir=*) state_dir="${1#*=}" ;;
       --help|-h) usage; exit 0 ;;
       --provider=*) die "push-site selects the wordpress-package provider automatically" ;;
-      *) restore_args+=("$1") ;;
+      *) restore_args+=("$1"); restore_arg_count=$((restore_arg_count + 1)) ;;
     esac
     shift
   done
@@ -383,6 +411,7 @@ push_site() (
     [[ "$target_root" =~ ^/[A-Za-z0-9._/-]+$ ]] ||
       die "Invalid destination WordPress root: $target_root"
     restore_args+=("--target-root=$target_root")
+    restore_arg_count=$((restore_arg_count + 1))
     log "Using destination root: $target_root"
   fi
 
@@ -410,6 +439,7 @@ push_site() (
     [[ "$new_url" =~ ^https?://[^[:space:]]+$ ]] ||
       die "Invalid destination site URL: $new_url"
     restore_args+=("--new-url=$new_url")
+    restore_arg_count=$((restore_arg_count + 1))
     log "Using destination URL: $new_url"
   fi
 
@@ -541,7 +571,9 @@ push_site() (
     append_shell_arg import_command "$remote_package"
   fi
 
-  for arg in "${restore_args[@]}"; do append_shell_arg import_command "$arg"; done
+  if [[ "$restore_arg_count" -gt 0 ]]; then
+    for arg in "${restore_args[@]}"; do append_shell_arg import_command "$arg"; done
+  fi
   printf -v remote_command 'bash -lc %q' "$import_command"
 
   set_log_phase restore
