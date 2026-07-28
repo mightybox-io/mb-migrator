@@ -415,6 +415,7 @@ push_site() (
   local rsync_batch_root
   local restore_arg_count=0 cleanup_specified=no remote_cache_reused=0
   local db_attempt db_dump_status db_ssh_status destination_free_kb source_content_kb
+  local rsync_help wp_content_ready=no
   local -a restore_args ssh_args scp_args rsync_args pipeline_status
 
   state_dir="$(default_state_dir)"
@@ -595,7 +596,8 @@ push_site() (
     printf -v ssh_transport 'ssh -p %q -i %q -o BatchMode=yes -o IdentitiesOnly=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=8 -o TCPKeepAlive=yes -o ConnectTimeout=20 -o UserKnownHostsFile=%q' \
       "$port" "$key_file" "$ssh_dir/known_hosts"
     rsync_args=(-azr --partial --partial-dir=.mb-migrator-partial --timeout=120 --no-perms --no-owner --no-group --omit-dir-times "--rsync-path=$remote_rsync_path")
-    if rsync --info=help 2>&1 | grep -q 'progress2'; then
+    rsync_help="$(rsync --info=help 2>&1 || true)"
+    if [[ "$rsync_help" == *progress2* ]]; then
       rsync_args+=(--human-readable --info=name0,progress2)
     else
       rsync_args+=(--progress)
@@ -603,8 +605,20 @@ push_site() (
     rsync_batch_root="$work/rsync-batches"
 
     set_log_phase files
-    log "Rsync pass 1 of 2: WordPress files in gateway-safe batches"
-    transfer_wp_content_batches "Pass 1" "$rsync_batch_root"
+    if [[ "$remote_cache_reused" == "1" ]]; then
+      log "Checking whether the existing cache can be refreshed in one short incremental pass"
+      if RSYNC_MAX_ATTEMPTS=1 run_live_rsync "${rsync_args[@]}" "--link-dest=$target_root/wp-content" -e "$ssh_transport" \
+        "$source_root/wp-content/" "$destination:$remote_stage/htdocs/wp-content/"; then
+        wp_content_ready=yes
+        log "Existing cache refreshed without batching"
+      else
+        warn "The cache still needs substantial work; switching to gateway-safe file batches"
+      fi
+    fi
+    if [[ "$wp_content_ready" == "no" ]]; then
+      log "Rsync pass 1 of 2: WordPress files in gateway-safe batches"
+      transfer_wp_content_batches "Pass 1" "$rsync_batch_root"
+    fi
     run_live_rsync "${rsync_args[@]}" "--link-dest=$target_root" -e "$ssh_transport" \
       --exclude='*/' \
       --exclude='index.php' \
@@ -613,10 +627,15 @@ push_site() (
       --exclude='wp-*.php' \
       --exclude='xmlrpc.php' \
       --exclude='wp-config.php' \
+      --exclude='wordpress-package-*.tar.gz' \
+      --exclude='wordpress-package-*.tar.gz.sha256' \
       "$source_root/" "$destination:$remote_stage/htdocs/"
 
-    log "Rsync pass 2 of 2: catching files changed during the first pass"
-    transfer_wp_content_batches "Pass 2" "$rsync_batch_root"
+    if [[ "$wp_content_ready" == "no" ]]; then
+      log "Rsync pass 2 of 2: catching files changed during the first pass"
+      run_live_rsync "${rsync_args[@]}" "--link-dest=$target_root/wp-content" -e "$ssh_transport" \
+        "$source_root/wp-content/" "$destination:$remote_stage/htdocs/wp-content/"
+    fi
     run_live_rsync "${rsync_args[@]}" "--link-dest=$target_root" -e "$ssh_transport" \
       --exclude='*/' \
       --exclude='index.php' \
@@ -625,6 +644,8 @@ push_site() (
       --exclude='wp-*.php' \
       --exclude='xmlrpc.php' \
       --exclude='wp-config.php' \
+      --exclude='wordpress-package-*.tar.gz' \
+      --exclude='wordpress-package-*.tar.gz.sha256' \
       "$source_root/" "$destination:$remote_stage/htdocs/"
 
     set_log_phase database
