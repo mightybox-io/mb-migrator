@@ -80,9 +80,9 @@ PATH="$FAKE_BIN:$PATH" "$ROOT_DIR/bin/mb-migrator" push-pair complete \
   --port=3022 \
   "--state-dir=$STATE_DIR"
 test -s "$MB_MIGRATOR_SSH_DIR/known_hosts"
+[[ "$(<"$STATE_DIR/push-pairings/current-pairing")" == "$pairing_id" ]]
 
 PATH="$FAKE_BIN:$PATH" "$ROOT_DIR/bin/mb-migrator" push-site \
-  "--pairing=$pairing_id" \
   "--state-dir=$STATE_DIR" \
   "--source-root=$SOURCE" \
   --source-db-method=native \
@@ -128,5 +128,28 @@ PATH="$FAKE_BIN:$PATH" "$ROOT_DIR/bin/mb-migrator" push-site \
 grep -q 'import-site' "$PUSH_IMPORT_MARKER"
 grep -q 'wordpress-package.tar.gz' "$PUSH_SCP_MARKER"
 grep -q 'wordpress-package.tar.gz.sha256' "$PUSH_SCP_MARKER"
+
+GUIDED_STATE="$TEST_ROOT/guided-state"
+: > "$PUSH_RSYNC_MARKER"
+printf 'OK\nguideduser@guided.example.test\n3022\n' |
+  PATH="$FAKE_BIN:$PATH" "$ROOT_DIR/bin/mb-migrator" push \
+    "--state-dir=$GUIDED_STATE" \
+    "--source-root=$SOURCE" \
+    --source-db-method=native \
+    --target-db-method=native \
+    --target-root=/srv/htdocs \
+    --new-url=https://destination-push.example.test \
+    --transport=rsync \
+    --db-import=yes \
+    --mu-plugins=skip \
+    --root-extras=skip \
+    --cleanup=no \
+    --yes
+
+guided_pairing_id="$(<"$GUIDED_STATE/push-pairings/current-pairing")"
+[[ "$guided_pairing_id" =~ ^[a-f0-9]{20}$ ]]
+[[ "$(<"$GUIDED_STATE/push-pairings/$guided_pairing_id/destination")" == "guideduser@guided.example.test" ]]
+[[ "$(<"$GUIDED_STATE/push-pairings/$guided_pairing_id/port")" == "3022" ]]
+grep -q 'import-staged' "$PUSH_IMPORT_MARKER"
 
 printf 'outbound push smoke test passed\n'

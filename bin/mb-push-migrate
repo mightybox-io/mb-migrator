@@ -11,17 +11,27 @@ usage() {
   cat <<'EOF'
 Outbound SSH push migration commands:
 
+  mb-migrator push
+  mb-migrator push-pair
+
+The default guided flow prepares a key, waits while you install its public key
+on the destination, asks for USER@HOST and port, verifies the connection, and
+then runs the migration.
+
+Advanced/retry commands:
   mb-migrator push-pair prepare [--state-dir=PATH]
   mb-migrator push-pair complete PAIRING_ID USER@HOST [--port=22]
-  mb-migrator push-site --pairing=PAIRING_ID --source-root=PATH \
-    --target-root=PATH [restore options]
+  mb-migrator push-site [--pairing=PAIRING_ID] [--source-root=PATH] \
+    [--target-root=PATH] [restore options]
 
 The private pairing key remains on the source host. Install only the public key
 printed by `push-pair prepare` on the destination SSH account.
 
-Push options:
-  --pairing=PAIRING_ID                 Prepared and completed pairing
-  --source-root=PATH                   Source WordPress document root
+Guided/push options:
+  --destination=USER@HOST              Skip the destination login prompt
+  --port=22                            Default: prompt with 22 as the default
+  --pairing=PAIRING_ID                 Default: saved current pairing
+  --source-root=PATH                   Default: /var/www/webroot/ROOT
   --source-db-method=auto|wp-cli|native
                                        Default: auto
   --target-root=PATH                   Default: auto-detect destination root
@@ -66,12 +76,14 @@ pairing_dir() {
 }
 
 prepare_pairing() (
-  local state_dir pairing_root pending key_file pairing_id final_dir public_key
+  local state_dir pairing_root pending key_file pairing_id final_dir public_key guided
   state_dir="$(default_state_dir)"
+  guided=no
   set_log_context pairing key
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --state-dir=*) state_dir="${1#*=}" ;;
+      --guided) guided=yes ;;
       --help|-h) usage; exit 0 ;;
       *) die "Unknown push-pair prepare option: $1" ;;
     esac
@@ -95,12 +107,18 @@ prepare_pairing() (
   mv "$pending" "$final_dir"
   trap - EXIT
   public_key="$(<"$final_dir/id_ed25519.pub")"
+  printf '%s\n' "$pairing_id" > "$pairing_root/pending-pairing"
+  chmod 600 "$pairing_root/pending-pairing"
 
   log "Pairing ID: $pairing_id"
   log "Private key stored on this source host: $final_dir/id_ed25519"
   printf '\nInstall this PUBLIC key on the new SSH account:\n\n%s\n\n' "$public_key"
-  printf 'After creating the destination account, complete pairing with:\n\n'
-  printf 'mb-migrator push-pair complete %s USER@HOST --port=22\n' "$pairing_id"
+  if [[ "$guided" == "yes" ]]; then
+    printf 'Create or open the destination SSH account and add that public key.\n'
+  else
+    printf 'After creating the destination account, complete pairing with:\n\n'
+    printf 'mb-migrator push-pair complete %s USER@HOST --port=22\n' "$pairing_id"
+  fi
 )
 
 complete_pairing() {
@@ -167,9 +185,89 @@ complete_pairing() {
   printf '%s\n' "$destination" > "$pair_dir/destination"
   printf '%s\n' "$port" > "$pair_dir/port"
   chmod 600 "$pair_dir/destination" "$pair_dir/port"
+  printf '%s\n' "$pairing_id" > "$state_dir/push-pairings/current-pairing"
+  chmod 600 "$state_dir/push-pairings/current-pairing"
   log "Push pairing verified: $pairing_id"
   log "Destination: $destination (port $port)"
 }
+
+prompt_value() {
+  local variable_name="$1" message="$2" default_value="${3:-}" answer
+  if [[ -n "$default_value" ]]; then
+    printf '[%s:prompt] %s [%s]: ' "$(log_prefix)" "$message" "$default_value" >&2
+  else
+    printf '[%s:prompt] %s: ' "$(log_prefix)" "$message" >&2
+  fi
+  IFS= read -r answer || die "Input ended before the guided migration was complete"
+  [[ -n "$answer" ]] || answer="$default_value"
+  printf -v "$variable_name" '%s' "$answer"
+}
+
+guided_push() (
+  local state_dir destination="" port="" source_root="" source_db_method="auto"
+  local target_db_method="auto" pairing_id confirmation arg
+  local -a push_args restore_args
+
+  state_dir="$(default_state_dir)"
+  restore_args=()
+  set_log_context pairing guide
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --destination=*) destination="${1#*=}" ;;
+      --port=*) port="${1#*=}" ;;
+      --state-dir=*) state_dir="${1#*=}" ;;
+      --source-root=*) source_root="${1#*=}" ;;
+      --source-db-method=*) source_db_method="${1#*=}" ;;
+      --target-db-method=*) target_db_method="${1#*=}" ;;
+      --pairing=*) die "The guided flow creates a new pairing; use push-site to reuse one" ;;
+      --help|-h) usage; exit 0 ;;
+      *) restore_args+=("$1") ;;
+    esac
+    shift
+  done
+
+  state_dir="$(abs_path_for_create "$state_dir")"
+  prepare_pairing "--state-dir=$state_dir" --guided
+  pairing_id="$(<"$state_dir/push-pairings/pending-pairing")"
+  validate_pairing_id "$pairing_id"
+
+  printf '\n'
+  prompt_value confirmation "When the public key is installed, type OK to continue"
+  case "$confirmation" in
+    [Oo][Kk]) ;;
+    *) die "Pairing was not confirmed. Rerun push-pair complete with pairing ID $pairing_id when ready" ;;
+  esac
+  if [[ -z "$destination" ]]; then
+    prompt_value destination "Destination SSH login (USER@HOST)"
+  fi
+  if [[ -z "$port" ]]; then
+    prompt_value port "Destination SSH port" "22"
+  fi
+  validate_destination "$destination"
+  validate_port "$port"
+
+  if [[ -z "$source_root" ]]; then
+    if [[ -d /var/www/webroot/ROOT ]]; then
+      source_root=/var/www/webroot/ROOT
+      set_log_context push discovery
+      log "Using source WordPress root: $source_root"
+    else
+      set_log_context push discovery
+      prompt_value source_root "Source WordPress root" "/var/www/webroot/ROOT"
+    fi
+  fi
+
+  complete_pairing "$pairing_id" "$destination" "--port=$port" "--state-dir=$state_dir"
+  push_args=(
+    "--pairing=$pairing_id"
+    "--state-dir=$state_dir"
+    "--source-root=$source_root"
+    "--source-db-method=$source_db_method"
+    "--target-db-method=$target_db_method"
+  )
+  for arg in "${restore_args[@]}"; do push_args+=("$arg"); done
+  push_site "${push_args[@]}"
+)
 
 append_shell_arg() {
   local variable_name="$1" value="$2" quoted
@@ -213,11 +311,22 @@ push_site() (
     shift
   done
 
-  [[ -n "$pairing_id" ]] || die "push-site requires --pairing"
-  [[ -n "$source_root" ]] || die "push-site requires --source-root"
   case "$source_db_method" in auto|wp-cli|native) ;; *) die "Invalid source database method: $source_db_method" ;; esac
   case "$transport" in auto|rsync|package) ;; *) die "Invalid transport: $transport" ;; esac
   state_dir="$(abs_path_for_create "$state_dir")"
+  if [[ -z "$pairing_id" && -r "$state_dir/push-pairings/current-pairing" ]]; then
+    pairing_id="$(<"$state_dir/push-pairings/current-pairing")"
+    validate_pairing_id "$pairing_id"
+    log "Using current pairing: $pairing_id"
+  fi
+  [[ -n "$pairing_id" ]] ||
+    die "No current pairing found. Run 'mb-migrator push' or pass --pairing"
+  if [[ -z "$source_root" && -d /var/www/webroot/ROOT ]]; then
+    source_root=/var/www/webroot/ROOT
+    log "Using source WordPress root: $source_root"
+  fi
+  [[ -n "$source_root" ]] ||
+    die "Could not find /var/www/webroot/ROOT; pass --source-root"
   pair_dir="$(pairing_dir "$state_dir" "$pairing_id")"
   key_file="$pair_dir/id_ed25519"
   [[ -f "$key_file" && -f "$pair_dir/destination" && -f "$pair_dir/port" ]] ||
@@ -243,10 +352,17 @@ push_site() (
       'target=""; if [ -d /srv/htdocs ] && [ -f /srv/htdocs/wp-config.php ]; then target=/srv/htdocs; elif [ -d "$HOME/htdocs" ] && [ -f "$HOME/htdocs/wp-config.php" ]; then target="$(readlink -f "$HOME/htdocs" 2>/dev/null || printf "%s" "$HOME/htdocs")"; fi; printf "__MB_TARGET_ROOT__=%s\n" "$target"')"
     target_root="$(printf '%s\n' "$remote_output" | tr -d '\r' |
       awk -F= '/^__MB_TARGET_ROOT__=/{value=$2} END{print value}')"
+    if [[ ! "$target_root" =~ ^/[A-Za-z0-9._/-]+$ ]]; then
+      if [[ -t 0 ]]; then
+        prompt_value target_root "Destination WordPress root" "/srv/htdocs"
+      else
+        die "Could not auto-detect the destination WordPress root; pass --target-root explicitly"
+      fi
+    fi
     [[ "$target_root" =~ ^/[A-Za-z0-9._/-]+$ ]] ||
-      die "Could not auto-detect the destination WordPress root; pass --target-root explicitly"
+      die "Invalid destination WordPress root: $target_root"
     restore_args+=("--target-root=$target_root")
-    log "Detected destination root: $target_root"
+    log "Using destination root: $target_root"
   fi
 
   if [[ -z "$new_url" ]]; then
@@ -263,10 +379,17 @@ push_site() (
         break
       fi
     done
+    if [[ ! "$new_url" =~ ^https?://[^[:space:]]+$ ]]; then
+      if [[ -t 0 ]]; then
+        prompt_value new_url "Destination site URL (including https://)"
+      else
+        die "Could not detect destination home or siteurl with WP-CLI; pass --new-url explicitly"
+      fi
+    fi
     [[ "$new_url" =~ ^https?://[^[:space:]]+$ ]] ||
-      die "Could not detect destination home or siteurl with WP-CLI; pass --new-url explicitly"
+      die "Invalid destination site URL: $new_url"
     restore_args+=("--new-url=$new_url")
-    log "Detected destination URL: $new_url"
+    log "Using destination URL: $new_url"
   fi
 
   set_log_phase transport
@@ -424,13 +547,15 @@ push_site() (
 command_name="${1:-}"
 [[ -z "$command_name" ]] || shift
 case "$command_name" in
+  push) guided_push "$@" ;;
   push-pair)
     action="${1:-}"
     [[ -z "$action" ]] || shift
     case "$action" in
       prepare) prepare_pairing "$@" ;;
       complete) complete_pairing "$@" ;;
-      --help|-h|'') usage ;;
+      --help|-h) usage ;;
+      '') guided_push "$@" ;;
       *) die "Unknown push-pair action: $action" ;;
     esac
     ;;

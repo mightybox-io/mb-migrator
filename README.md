@@ -84,32 +84,33 @@ On a live site, GNU tar may report that the `wp-content` directory changed while
 
 Use the outbound push workflow when the old host cannot accept inbound SSH but can connect outward to the new host. Pairing is prepared on the old host before the destination username exists. The private key never leaves the old host; install only the generated public key on the new SSH account.
 
-First, run this on the old host:
+For the normal guided migration, run this single command on the old host:
 
 ```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/mightybox-io/mb-migrator/main/remote-run.sh)" -- push-pair prepare
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/mightybox-io/mb-migrator/main/remote-run.sh)" -- push
 ```
 
-The command prints a pairing ID and an `ssh-ed25519` public key. Create the destination SSH account and install that public key through the hosting panel or its `~/.ssh/authorized_keys` file.
+The wizard:
 
-Back on the old host, complete and verify pairing:
+1. Creates a private migration key on the old host and prints only its public key.
+2. Pauses while you create or open the destination SSH account and install the public key.
+3. Asks you to type `OK`, then asks for the destination `USER@HOST` and SSH port.
+4. Verifies and saves the pairing without asking you to copy a pairing ID.
+5. Uses `/var/www/webroot/ROOT` as the source when it exists, discovers the destination WordPress root and URL, and begins the migration.
+
+You may supply known values up front while keeping the guided pause:
 
 ```bash
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/mightybox-io/mb-migrator/main/remote-run.sh)" -- \
-  push-pair complete PAIRING_ID USER@NEW-HOST \
-  --port=22
-```
-
-The first connection records a previously unseen destination SSH host key using OpenSSH's `accept-new` policy. On older clients that lack `accept-new`, the migrator retrieves and displays the new key fingerprint before storing it, then connects with strict verification. Previously recorded keys must still match, so changed host keys are rejected. After verification, start the entire migration from the old host:
-
-```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/mightybox-io/mb-migrator/main/remote-run.sh)" -- \
-  push-site \
-  --pairing=PAIRING_ID \
+  push \
+  --destination=USER@NEW-HOST \
+  --port=22 \
   --source-root=/var/www/webroot/ROOT \
   --source-db-method=auto \
   --target-db-method=auto
 ```
+
+The first connection records a previously unseen destination SSH host key using OpenSSH's `accept-new` policy. On older clients that lack `accept-new`, the migrator retrieves and displays the new key fingerprint before storing it, then connects with strict verification. Previously recorded keys must still match, so changed host keys are rejected.
 
 `push-site` detects `/srv/htdocs` on the destination, falling back to the destination account's `~/htdocs` when needed. Pass `--target-root` only to override discovery. It runs destination commands through a login shell so hosting-platform PATH and environment setup is available. From inside the detected root it runs `wp option get siteurl`, falling back to `wp option get home`, and uses that value as the new URL for serialized-safe search-replace; pass `--new-url` only to override it.
 
@@ -120,8 +121,6 @@ If either host lacks `rsync`, automatic mode falls back to building and transfer
 ```bash
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/mightybox-io/mb-migrator/main/remote-run.sh)" -- \
   push-site \
-  --pairing=PAIRING_ID \
-  --source-root=/var/www/webroot/ROOT \
   --transport=rsync \
   --source-db-method=auto \
   --target-db-method=auto
@@ -129,7 +128,17 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/mightybox-io/mb-migrator
 
 Successful runs remove temporary transfer data when destination cleanup is accepted. When destination cleanup is declined, its staging directory and report remain available. When an import fails, the private incoming directory is retained and its remote path is printed for recovery.
 
-Pairing state is private and persists under `~/.local/state/mb-migrator/push-pairings` by default. Use `--state-dir` consistently across prepare, complete, and push when a different location is required. Force native source export with `--source-db-method=native` when source WP-CLI is unavailable.
+Pairing state is private and persists under `~/.local/state/mb-migrator/push-pairings` by default. A successfully completed pairing becomes the current pairing, so later `push-site` catch-up runs do not require its ID. Pass `--pairing=PAIRING_ID` only to select a different saved pairing. Use `--state-dir` consistently when a different state location is required. Force native source export with `--source-db-method=native` when source WP-CLI is unavailable.
+
+For scripting, troubleshooting, or resuming one particular phase, the original low-level commands remain available:
+
+```bash
+mb-migrator push-pair prepare
+mb-migrator push-pair complete PAIRING_ID USER@NEW-HOST --port=22
+mb-migrator push-site --pairing=PAIRING_ID --source-root=/var/www/webroot/ROOT
+```
+
+Running `mb-migrator push-pair` without `prepare` or `complete` is also an alias for the guided `push` flow.
 
 ## Live Legacy MightyBox Migration
 

@@ -14,7 +14,7 @@ case "${1:-}" in
     printf '\nArchive restore options:\n\n'
     exec "$SCRIPT_DIR/wp-export-migrate" --help
     ;;
-  push-pair|push-site)
+  push|push-pair|push-site)
     exec "$SCRIPT_DIR/mb-push-migrate" "$@"
     ;;
   export-site|import-site|import-staged)
