@@ -370,11 +370,49 @@ run_live_scp() {
   done
 }
 
+transfer_wp_content_batches() {
+  local pass_name="$1" batch_root="$2" file_list batch_file batch_count batch_number=0
+  local batch_size="${RSYNC_BATCH_SIZE:-250}"
+  [[ "$batch_size" =~ ^[0-9]+$ && "$batch_size" -ge 25 && "$batch_size" -le 5000 ]] ||
+    die "RSYNC_BATCH_SIZE must be between 25 and 5000"
+
+  rm -rf "$batch_root"
+  mkdir -p "$batch_root"
+  file_list="$batch_root/all-files"
+  (
+    cd "$source_root"
+    find wp-content \( -type f -o -type l \) -print | LC_ALL=C sort
+  ) > "$file_list"
+
+  if [[ ! -s "$file_list" ]]; then
+    log "$pass_name: no wp-content files found"
+    return 0
+  fi
+  awk -v size="$batch_size" -v root="$batch_root" '
+    {
+      output = sprintf("%s/batch.%06d", root, int((NR - 1) / size) + 1)
+      if (output != previous && previous != "") close(previous)
+      print > output
+      previous = output
+    }
+    END { if (previous != "") close(previous) }
+  ' "$file_list"
+  batch_count="$(find "$batch_root" -type f -name 'batch.*' | wc -l | tr -d '[:space:]')"
+  for batch_file in "$batch_root"/batch.*; do
+    batch_number=$((batch_number + 1))
+    log "$pass_name: file batch $batch_number/$batch_count"
+    run_live_rsync "${rsync_args[@]}" "--link-dest=$target_root/wp-content" \
+      --files-from="$batch_file" --relative -e "$ssh_transport" \
+      "$source_root/" "$destination:$remote_stage/htdocs/"
+  done
+}
+
 push_site() (
   local pairing_id="" source_root="" source_db_method="auto" target_root="" new_url=""
   local transport="auto" selected_transport state_dir pair_dir key_file destination port ssh_dir work package
   local remote_output remote_dir remote_package remote_stage remote_runner remote_command import_command cleanup_command url_command login_command
   local repo ref arg option_name detected_url quoted_target source_url ssh_transport remote_prepare remote_rsync_path=""
+  local rsync_batch_root
   local restore_arg_count=0 cleanup_specified=no remote_cache_reused=0
   local db_attempt db_dump_status db_ssh_status destination_free_kb source_content_kb
   local -a restore_args ssh_args scp_args rsync_args pipeline_status
@@ -556,17 +594,17 @@ push_site() (
 
     printf -v ssh_transport 'ssh -p %q -i %q -o BatchMode=yes -o IdentitiesOnly=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=8 -o TCPKeepAlive=yes -o ConnectTimeout=20 -o UserKnownHostsFile=%q' \
       "$port" "$key_file" "$ssh_dir/known_hosts"
-    rsync_args=(-az --partial --partial-dir=.mb-migrator-partial --timeout=120 --no-perms --no-owner --no-group --omit-dir-times "--rsync-path=$remote_rsync_path")
+    rsync_args=(-azr --partial --partial-dir=.mb-migrator-partial --timeout=120 --no-perms --no-owner --no-group --omit-dir-times "--rsync-path=$remote_rsync_path")
     if rsync --info=help 2>&1 | grep -q 'progress2'; then
-      rsync_args+=(--human-readable --info=progress2)
+      rsync_args+=(--human-readable --info=name0,progress2)
     else
       rsync_args+=(--progress)
     fi
+    rsync_batch_root="$work/rsync-batches"
 
     set_log_phase files
-    log "Rsync pass 1 of 2: WordPress files"
-    run_live_rsync "${rsync_args[@]}" "--link-dest=$target_root/wp-content" -e "$ssh_transport" \
-      "$source_root/wp-content/" "$destination:$remote_stage/htdocs/wp-content/"
+    log "Rsync pass 1 of 2: WordPress files in gateway-safe batches"
+    transfer_wp_content_batches "Pass 1" "$rsync_batch_root"
     run_live_rsync "${rsync_args[@]}" "--link-dest=$target_root" -e "$ssh_transport" \
       --exclude='*/' \
       --exclude='index.php' \
@@ -578,8 +616,7 @@ push_site() (
       "$source_root/" "$destination:$remote_stage/htdocs/"
 
     log "Rsync pass 2 of 2: catching files changed during the first pass"
-    run_live_rsync "${rsync_args[@]}" "--link-dest=$target_root/wp-content" -e "$ssh_transport" \
-      "$source_root/wp-content/" "$destination:$remote_stage/htdocs/wp-content/"
+    transfer_wp_content_batches "Pass 2" "$rsync_batch_root"
     run_live_rsync "${rsync_args[@]}" "--link-dest=$target_root" -e "$ssh_transport" \
       --exclude='*/' \
       --exclude='index.php' \

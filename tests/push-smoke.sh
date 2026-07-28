@@ -108,7 +108,7 @@ grep -q 'import-staged' "$PUSH_IMPORT_MARKER"
 grep -q 'staged-site' "$PUSH_IMPORT_MARKER"
 grep -q "rsync-$pairing_id/staged-site" "$PUSH_IMPORT_MARKER"
 [[ "$(wc -l < "$PUSH_RSYNC_MARKER")" -eq 5 ]]
-grep -q -- '--info=progress2' "$PUSH_RSYNC_MARKER"
+grep -q -- '--info=name0,progress2' "$PUSH_RSYNC_MARKER"
 grep -q -- '--link-dest=/srv/htdocs/wp-content' "$PUSH_RSYNC_MARKER"
 grep -q -- '--partial-dir=.mb-migrator-partial' "$PUSH_RSYNC_MARKER"
 grep -q -- '--timeout=120' "$PUSH_RSYNC_MARKER"
