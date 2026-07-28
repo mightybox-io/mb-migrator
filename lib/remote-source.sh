@@ -186,13 +186,22 @@ is_core_root_file() {
   return 1
 }
 
+is_migration_artifact_root_file() {
+  case "$1" in
+    wordpress-package-*.tar.gz|wordpress-package-*.tar.gz.sha256|db-backup-before-import-*.sql|mb-migrator-report-*.txt)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
 archive_files() {
   local include_content="$1" item name tar_status=0 tar_errors
   local paths=()
   [[ "$include_content" -eq 0 ]] || paths+=("wp-content")
   while IFS= read -r item; do
     name="${item#./}"
-    is_core_root_file "$name" || paths+=("$name")
+    is_core_root_file "$name" || is_migration_artifact_root_file "$name" || paths+=("$name")
   done < <(cd "$source_root" && find . -mindepth 1 -maxdepth 1 -type f -print | LC_ALL=C sort)
   tar_errors="$(mktemp "${TMPDIR:-/tmp}/mb-migrator-tar-errors.XXXXXX")"
   trap 'rm -f "$tar_errors"' RETURN

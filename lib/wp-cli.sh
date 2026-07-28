@@ -112,4 +112,11 @@ wpcli_search_replace() {
     return 0
   fi
   report "Ran search-replace from $old_url to $new_url"
+  if wp_in_root "$target_root" cache flush; then
+    log "Flushed the WordPress object cache after URL replacement"
+    report "WordPress object cache flushed"
+  else
+    warn "URL replacement succeeded, but the WordPress object cache could not be flushed"
+    report "WordPress object cache flush: failed"
+  fi
 }

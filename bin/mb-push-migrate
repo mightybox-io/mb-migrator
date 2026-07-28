@@ -415,7 +415,7 @@ push_site() (
   local rsync_batch_root
   local restore_arg_count=0 cleanup_specified=no remote_cache_reused=0
   local db_attempt db_dump_status db_ssh_status destination_free_kb source_content_kb
-  local rsync_help wp_content_ready=no
+  local rsync_help wp_content_ready=no pruned_artifacts=0 verify_output http_code
   local -a restore_args ssh_args scp_args rsync_args pipeline_status
 
   state_dir="$(default_state_dir)"
@@ -648,6 +648,14 @@ push_site() (
       --exclude='wordpress-package-*.tar.gz.sha256' \
       "$source_root/" "$destination:$remote_stage/htdocs/"
 
+    printf -v remote_prepare 'stage=%q; removed=0; for artifact in "$stage"/htdocs/wordpress-package-*.tar.gz "$stage"/htdocs/wordpress-package-*.tar.gz.sha256 "$stage"/htdocs/db-backup-before-import-*.sql "$stage"/htdocs/mb-migrator-report-*.txt; do [ ! -f "$artifact" ] || { rm -f "$artifact"; removed=$((removed + 1)); }; done; printf "__MB_PRUNED_ARTIFACTS__=%%s\n" "$removed"' \
+      "$remote_stage"
+    remote_output="$(ssh "${ssh_args[@]}" "$destination" "$remote_prepare")"
+    pruned_artifacts="$(printf '%s\n' "$remote_output" | tr -d '\r' | awk -F= '/^__MB_PRUNED_ARTIFACTS__=/{value=$2} END{print value}')"
+    if [[ "$pruned_artifacts" =~ ^[0-9]+$ && "$pruned_artifacts" -gt 0 ]]; then
+      log "Removed $pruned_artifacts prior migration artifact(s) from the destination cache"
+    fi
+
     set_log_phase database
     db_attempt=1
     while :; do
@@ -728,6 +736,24 @@ push_site() (
   elif ! ssh "${ssh_args[@]}" "$destination" "$remote_command"; then
     warn "Destination import failed; transferred migration data retained at: $destination:$remote_dir"
     exit 1
+  fi
+
+  set_log_phase verify
+  printf -v url_command 'cd %q && wp core is-installed && printf "__MB_HOME__=%%s\n" "$(wp option get home)"' "$target_root"
+  printf -v login_command 'bash -lc %q' "$url_command"
+  if verify_output="$(ssh "${ssh_args[@]}" "$destination" "$login_command" 2>/dev/null)"; then
+    detected_url="$(printf '%s\n' "$verify_output" | tr -d '\r' | awk -F= '/^__MB_HOME__=/{sub(/^[^=]*=/, ""); value=$0} END{print value}')"
+    log "Destination WordPress check passed (home: ${detected_url:-unknown})"
+  else
+    warn "Migration completed, but the destination WP-CLI health check failed"
+  fi
+  if [[ "${MB_MIGRATOR_SKIP_HTTP_VERIFY:-0}" != "1" ]] && command -v curl >/dev/null 2>&1; then
+    http_code="$(curl -L -sS -o /dev/null -w '%{http_code}' --max-time 30 "$new_url" 2>/dev/null || true)"
+    if [[ "$http_code" =~ ^2[0-9][0-9]$ || "$http_code" =~ ^3[0-9][0-9]$ ]]; then
+      log "Destination HTTP check passed ($http_code: $new_url)"
+    else
+      warn "Destination HTTP check returned ${http_code:-no response}: $new_url"
+    fi
   fi
 
   set_log_phase cleanup

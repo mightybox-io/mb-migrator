@@ -26,7 +26,9 @@ printf '%s\n' '#!/usr/bin/env bash' \
   '  *"__MB_REMOTE_DIR__"*) printf '\''__MB_REMOTE_DIR__=/home/destination/.local/state/mb-migrator/incoming/push.test123\n'\'' ;;' \
   '  *"mkdir -p"*"staged-site"*) exit 0 ;;' \
   '  *"df -Pk"*) printf '\''__MB_FREE_KB__=10485760\n'\'' ;;' \
+  '  *"__MB_PRUNED_ARTIFACTS__"*) printf '\''__MB_PRUNED_ARTIFACTS__=0\n'\'' ;;' \
   '  *"database-package/site.sql"*) cat > "$PUSH_DB_MARKER" ;;' \
+  '  *"core"*"is-installed"*) printf '\''__MB_HOME__=https://destination-push.example.test\n'\'' ;;' \
   '  *"rm -f"*) printf '\''%s\n'\'' "$command_text" > "$PUSH_CLEANUP_MARKER" ;;' \
   '  *"remote-run.sh"*) printf '\''%s\n'\'' "$command_text" > "$PUSH_IMPORT_MARKER" ;;' \
   '  *) printf '\''unexpected fake ssh command: %s\n'\'' "$command_text" >&2; exit 1 ;;' \
@@ -72,6 +74,7 @@ export PUSH_URL_MARKER="$TEST_ROOT/url-command"
 export PUSH_REMOTE_CACHE_MARKER="$TEST_ROOT/remote-cache"
 export PUSH_RSYNC_RETRY_MARKER="$TEST_ROOT/rsync-retried"
 export MB_MIGRATOR_SSH_DIR="$TEST_ROOT/ssh"
+export MB_MIGRATOR_SKIP_HTTP_VERIFY=1
 
 prepare_output="$(PATH="$FAKE_BIN:$PATH" "$ROOT_DIR/bin/mb-migrator" push-pair prepare "--state-dir=$STATE_DIR")"
 pairing_id="$(printf '%s\n' "$prepare_output" | awk -F': ' '/Pairing ID:/{print $2; exit}')"

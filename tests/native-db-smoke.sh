@@ -81,8 +81,8 @@ printf '%s\n' '#!/usr/bin/env bash' \
   'set -euo pipefail' \
   '[[ "$PWD" == "$WP_EXPECTED_ROOT" ]]' \
   '[[ " $* " != *" --path="* ]]' \
-  '[[ " $* " == *" search-replace "* ]]' \
-  'printf '\''%s\n'\'' "$*" > "$WP_REWRITE_MARKER"' > "$FAKE_BIN/wp"
+  'if [[ " $* " == *" search-replace "* ]]; then printf '\''%s\n'\'' "$*" > "$WP_REWRITE_MARKER"; exit 0; fi' \
+  '[[ " $* " == *" cache flush "* ]]' > "$FAKE_BIN/wp"
 chmod +x "$FAKE_BIN/wp"
 export WP_EXPECTED_ROOT="$TARGET"
 export WP_REWRITE_MARKER="$TEST_ROOT/wp-rewrite"
