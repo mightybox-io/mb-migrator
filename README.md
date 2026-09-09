@@ -110,6 +110,39 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/mightybox-io/mb-migrator
   --target-db-method=auto
 ```
 
+For a GridPane source, pass the site's `htdocs` directory. The migrator detects
+GridPane's standard parent-level `wp-config.php` without copying that file into
+the migration package:
+
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/mightybox-io/mb-migrator/main/remote-run.sh)" -- \
+  push \
+  --source-root=/var/www/example.com/htdocs \
+  --destination=USER@NEW-HOST \
+  --port=22
+```
+
+An in-document-root `wp-config.php` takes precedence when both locations exist.
+The parent fallback is used only when the source directory itself is named
+`htdocs`.
+
+If the destination SSH gateway requires a password after public-key
+authentication, load it without placing it in shell history and clear it after
+the run:
+
+```bash
+read -r -s -p "Destination SSH password: " MB_MIGRATOR_DESTINATION_PASSWORD
+printf '\n'
+export MB_MIGRATOR_DESTINATION_PASSWORD
+
+mb-migrator push --source-root=/var/www/example.com/htdocs
+
+unset MB_MIGRATOR_DESTINATION_PASSWORD
+```
+
+The password remains in the source process environment only. It is not written
+to migration state, reports, command arguments, or the destination.
+
 The first connection records a previously unseen destination SSH host key using OpenSSH's `accept-new` policy. On older clients that lack `accept-new`, the migrator retrieves and displays the new key fingerprint before storing it, then connects with strict verification. Previously recorded keys must still match, so changed host keys are rejected.
 
 `push-site` detects `/srv/htdocs` on the destination, falling back to the destination account's `~/htdocs` when needed. Pass `--target-root` only to override discovery. It runs destination commands through a login shell so hosting-platform PATH and environment setup is available. From inside the detected root it runs `wp option get siteurl`, falling back to `wp option get home`, and uses that value as the new URL for serialized-safe search-replace; pass `--new-url` only to override it.

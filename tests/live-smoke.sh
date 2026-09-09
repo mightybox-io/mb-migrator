@@ -152,6 +152,64 @@ test -f "$FAKE_RSYNC_MARKER"
 test -f "$TARGET/wp-content/uploads/2026/07/rsync.txt"
 test "$(find "$STATE/migrations" -path '*/snapshots/*.tar.gz' -type f | wc -l | tr -d ' ')" -eq 3
 
+GRIDPANE_SITE="$TEST_ROOT/gridpane.example.test"
+GRIDPANE_SOURCE="$GRIDPANE_SITE/htdocs"
+mkdir -p "$GRIDPANE_SOURCE/wp-content/uploads"
+printf '%s\n' 'gridpane upload' > "$GRIDPANE_SOURCE/wp-content/uploads/gridpane.txt"
+printf '%s\n' \
+  '<?php' \
+  "define('DB_NAME', 'gridpane_db');" \
+  "define('DB_USER', 'gridpane_user');" \
+  "define('DB_PASSWORD', getenv('LEGACY_DB_PASSWORD'));" \
+  "define('DB_HOST', 'localhost:3307');" \
+  "\$table_prefix = 'wp_';" > "$GRIDPANE_SITE/wp-config.php"
+
+PATH="$FAKE_BIN:$PATH" bash "$ROOT_DIR/lib/remote-source.sh" \
+  preflight "$GRIDPANE_SOURCE" native > "$TEST_ROOT/gridpane-preflight.log"
+grep -q "source_root=$GRIDPANE_SOURCE" "$TEST_ROOT/gridpane-preflight.log"
+
+PATH="$FAKE_BIN:$PATH" bash "$ROOT_DIR/lib/remote-source.sh" \
+  export-db "$GRIDPANE_SOURCE" native > "$TEST_ROOT/gridpane.sql"
+grep -q 'CREATE TABLE `wp_options`' "$TEST_ROOT/gridpane.sql"
+
+PATH="$FAKE_BIN:$PATH" bash "$ROOT_DIR/lib/remote-source.sh" \
+  archive-files "$GRIDPANE_SOURCE" native > "$TEST_ROOT/gridpane-files.tar.gz"
+tar -tzf "$TEST_ROOT/gridpane-files.tar.gz" | grep -q '^wp-content/uploads/gridpane.txt$'
+if tar -tzf "$TEST_ROOT/gridpane-files.tar.gz" | grep -q 'wp-config.php'; then
+  printf 'GridPane live snapshot unexpectedly contains parent wp-config.php\n' >&2
+  exit 1
+fi
+
+printf '%s\n' "define('MULTISITE', true);" >> "$GRIDPANE_SITE/wp-config.php"
+if PATH="$FAKE_BIN:$PATH" bash "$ROOT_DIR/lib/remote-source.sh" \
+  preflight "$GRIDPANE_SOURCE" native >/dev/null 2>&1; then
+  printf 'GridPane multisite preflight was expected to fail\n' >&2
+  exit 1
+fi
+
+MISSING_CONFIG_SOURCE="$TEST_ROOT/missing-config/htdocs"
+mkdir -p "$MISSING_CONFIG_SOURCE/wp-content"
+if PATH="$FAKE_BIN:$PATH" bash "$ROOT_DIR/lib/remote-source.sh" \
+  preflight "$MISSING_CONFIG_SOURCE" native >/dev/null 2>&1; then
+  printf 'GridPane-style source without a parent config unexpectedly passed preflight\n' >&2
+  exit 1
+fi
+
+DUAL_CONFIG_SITE="$TEST_ROOT/dual-config.example.test"
+DUAL_CONFIG_SOURCE="$DUAL_CONFIG_SITE/htdocs"
+mkdir -p "$DUAL_CONFIG_SOURCE/wp-content"
+printf '%s\n' '<?php' "define('MULTISITE', true);" > "$DUAL_CONFIG_SITE/wp-config.php"
+printf '%s\n' \
+  '<?php' \
+  "define('DB_NAME', 'child_db');" \
+  "define('DB_USER', 'child_user');" \
+  "define('DB_PASSWORD', getenv('LEGACY_DB_PASSWORD'));" \
+  "define('DB_HOST', 'localhost:3307');" \
+  "\$table_prefix = 'wp_';" > "$DUAL_CONFIG_SOURCE/wp-config.php"
+PATH="$FAKE_BIN:$PATH" bash "$ROOT_DIR/lib/remote-source.sh" \
+  preflight "$DUAL_CONFIG_SOURCE" native > "$TEST_ROOT/dual-config-preflight.log"
+grep -q "source_config=$DUAL_CONFIG_SOURCE/wp-config.php" "$TEST_ROOT/dual-config-preflight.log"
+
 printf '%s\n' "define('MULTISITE', true);" >> "$SOURCE/wp-config.php"
 if PATH="$FAKE_BIN:$PATH" bash "$ROOT_DIR/lib/remote-source.sh" preflight "$SOURCE" native >/dev/null 2>&1; then
   printf 'multisite preflight was expected to fail\n' >&2

@@ -4,6 +4,7 @@ set -euo pipefail
 command_name="${1:-}"
 source_root="${2:-}"
 db_method="${3:-auto}"
+source_config=""
 
 fail() {
   printf '[source-collector:error] %s\n' "$*" >&2
@@ -12,7 +13,14 @@ fail() {
 
 [[ "$source_root" == /* ]] || fail "source root must be absolute"
 [[ -d "$source_root/wp-content" ]] || fail "wp-content not found: $source_root/wp-content"
-[[ -r "$source_root/wp-config.php" ]] || fail "wp-config.php is not readable: $source_root/wp-config.php"
+
+if [[ -r "$source_root/wp-config.php" ]]; then
+  source_config="$source_root/wp-config.php"
+elif [[ "$(basename "$source_root")" == "htdocs" && -r "$(dirname "$source_root")/wp-config.php" ]]; then
+  source_config="$(dirname "$source_root")/wp-config.php"
+else
+  fail "wp-config.php is not readable in the source root or its GridPane parent: $source_root"
+fi
 
 config_value() {
   local key="$1" type="${2:-constant}" value=""
@@ -41,7 +49,7 @@ config_value() {
       $v = getenv($argv[2]); if ($v !== false) { echo $v; exit(0); }
     }
     exit(1);
-  ' "$source_root/wp-config.php" "$key" "$type"
+  ' "$source_config" "$key" "$type"
 }
 
 is_multisite() {
@@ -51,7 +59,7 @@ is_multisite() {
   fi
   value="$(config_value MULTISITE 2>/dev/null || true)"
   case "$value" in 1|true|TRUE) return 0 ;; esac
-  grep -Eq "define[[:space:]]*\([[:space:]]*['\"]MULTISITE['\"][[:space:]]*,[[:space:]]*(true|TRUE|1)[[:space:]]*\)" "$source_root/wp-config.php" && return 0
+  grep -Eq "define[[:space:]]*\([[:space:]]*['\"]MULTISITE['\"][[:space:]]*,[[:space:]]*(true|TRUE|1)[[:space:]]*\)" "$source_config" && return 0
   return 1
 }
 
@@ -228,6 +236,7 @@ case "$command_name" in
     is_multisite && fail "WordPress Multisite is not supported"
     check_database_export
     printf 'source_root=%s\n' "$source_root"
+    printf 'source_config=%s\n' "$source_config"
     printf 'wp_cli=%s\n' "$(command -v wp 2>/dev/null || printf unavailable)"
     printf 'rsync=%s\n' "$(command -v rsync 2>/dev/null || printf unavailable)"
     ;;

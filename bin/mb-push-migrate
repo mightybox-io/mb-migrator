@@ -6,6 +6,17 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 source "$ROOT_DIR/lib/util.sh"
 set_log_context push setup
+SSH_BATCH_MODE="yes"
+
+configure_destination_auth() {
+  SSH_BATCH_MODE="yes"
+  if [[ -n "${MB_MIGRATOR_DESTINATION_PASSWORD:-}" ]]; then
+    SSH_BATCH_MODE="no"
+    export DISPLAY="${DISPLAY:-mb-migrator}"
+    export SSH_ASKPASS_REQUIRE="force"
+    export SSH_ASKPASS="$ROOT_DIR/lib/ssh-askpass.sh"
+  fi
+}
 
 usage() {
   cat <<'EOF'
@@ -151,9 +162,10 @@ complete_pairing() {
   chmod 700 "$ssh_dir"
   touch "$ssh_dir/known_hosts"
   chmod 600 "$ssh_dir/known_hosts"
+  configure_destination_auth
 
   strict_policy="accept-new"
-  if ! ssh -G -o StrictHostKeyChecking=accept-new "$destination" >/dev/null 2>&1; then
+  if ! ssh -G -o "BatchMode=$SSH_BATCH_MODE" -o StrictHostKeyChecking=accept-new "$destination" >/dev/null 2>&1; then
     strict_policy="yes"
     need_cmd ssh-keyscan
     host="${destination#*@}"
@@ -177,7 +189,7 @@ complete_pairing() {
 
   log "Verifying outbound SSH host key and key authentication"
   ssh -p "$port" -i "$key_file" \
-    -o BatchMode=yes \
+    -o "BatchMode=$SSH_BATCH_MODE" \
     -o IdentitiesOnly=yes \
     -o "StrictHostKeyChecking=$strict_policy" \
     -o "UserKnownHostsFile=$ssh_dir/known_hosts" \
@@ -416,8 +428,9 @@ push_site() (
   local restore_arg_count=0 cleanup_specified=no remote_cache_reused=0
   local db_attempt db_dump_status db_ssh_status destination_free_kb source_content_kb
   local rsync_help wp_content_ready=no pruned_artifacts=0 verify_output http_code
-  local -a restore_args ssh_args scp_args rsync_args pipeline_status
+  local -a invocation_args restore_args ssh_args scp_args rsync_args pipeline_status
 
+  invocation_args=("$@")
   state_dir="$(default_state_dir)"
   set_log_context push setup
   restore_args=()
@@ -467,8 +480,15 @@ push_site() (
   [[ -f "$ssh_dir/known_hosts" ]] || die "SSH known_hosts file is missing; rerun push-pair complete"
 
   need_cmd ssh
-  ssh_args=(-p "$port" -i "$key_file" -o BatchMode=yes -o IdentitiesOnly=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=8 -o TCPKeepAlive=yes -o ConnectTimeout=20 -o "UserKnownHostsFile=$ssh_dir/known_hosts")
-  scp_args=(-P "$port" -i "$key_file" -o BatchMode=yes -o IdentitiesOnly=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=8 -o TCPKeepAlive=yes -o ConnectTimeout=20 -o "UserKnownHostsFile=$ssh_dir/known_hosts")
+  configure_destination_auth
+  if [[ -n "${MB_MIGRATOR_DESTINATION_PASSWORD:-}" && -t 0 &&
+    "${MB_MIGRATOR_ASKPASS_DETACHED:-0}" != "1" ]] && command -v setsid >/dev/null 2>&1; then
+    export MB_MIGRATOR_ASKPASS_DETACHED=1
+    log "Detaching from the terminal so the saved destination password can answer SSH non-interactively"
+    exec setsid -w "$ROOT_DIR/bin/mb-migrator" push-site "${invocation_args[@]}" </dev/null
+  fi
+  ssh_args=(-p "$port" -i "$key_file" -o "BatchMode=$SSH_BATCH_MODE" -o IdentitiesOnly=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=8 -o TCPKeepAlive=yes -o ConnectTimeout=20 -o "UserKnownHostsFile=$ssh_dir/known_hosts")
+  scp_args=(-P "$port" -i "$key_file" -o "BatchMode=$SSH_BATCH_MODE" -o IdentitiesOnly=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=8 -o TCPKeepAlive=yes -o ConnectTimeout=20 -o "UserKnownHostsFile=$ssh_dir/known_hosts")
   set_log_phase connect
   log "Verifying saved SSH pairing"
   ssh "${ssh_args[@]}" "$destination" true || die "Saved SSH pairing could not connect"
@@ -593,8 +613,8 @@ push_site() (
       fi
     fi
 
-    printf -v ssh_transport 'ssh -p %q -i %q -o BatchMode=yes -o IdentitiesOnly=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=8 -o TCPKeepAlive=yes -o ConnectTimeout=20 -o UserKnownHostsFile=%q' \
-      "$port" "$key_file" "$ssh_dir/known_hosts"
+    printf -v ssh_transport 'ssh -p %q -i %q -o BatchMode=%q -o IdentitiesOnly=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=8 -o TCPKeepAlive=yes -o ConnectTimeout=20 -o UserKnownHostsFile=%q' \
+      "$port" "$key_file" "$SSH_BATCH_MODE" "$ssh_dir/known_hosts"
     rsync_args=(-azr --partial --partial-dir=.mb-migrator-partial --timeout=120 --no-perms --no-owner --no-group --omit-dir-times "--rsync-path=$remote_rsync_path")
     rsync_help="$(rsync --info=help 2>&1 || true)"
     if [[ "$rsync_help" == *progress2* ]]; then

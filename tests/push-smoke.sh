@@ -14,6 +14,12 @@ printf '%s\n' '<?php' "\$table_prefix = 'wp_';" > "$SOURCE/wp-config.php"
 
 printf '%s\n' '#!/usr/bin/env bash' \
   'set -euo pipefail' \
+  'if [[ -n "${MB_MIGRATOR_DESTINATION_PASSWORD:-}" ]]; then' \
+  '  [[ " $* " == *" BatchMode=no "* ]] || exit 81' \
+  '  [[ "${SSH_ASKPASS_REQUIRE:-}" == "force" ]] || exit 82' \
+  '  [[ -x "${SSH_ASKPASS:-}" ]] || exit 83' \
+  '  [[ "$("$SSH_ASKPASS")" == "$MB_MIGRATOR_DESTINATION_PASSWORD" ]] || exit 84' \
+  'fi' \
   '[[ " $* " == *" -G "* ]] && exit 1' \
   'command_text="${!#}"' \
   'case "$command_text" in' \
@@ -36,11 +42,13 @@ printf '%s\n' '#!/usr/bin/env bash' \
 
 printf '%s\n' '#!/usr/bin/env bash' \
   'set -euo pipefail' \
+  'if [[ -n "${MB_MIGRATOR_DESTINATION_PASSWORD:-}" ]]; then [[ " $* " == *" BatchMode=no "* ]] || exit 81; fi' \
   'printf '\''%s\n'\'' "$*" >> "$PUSH_SCP_MARKER"' > "$FAKE_BIN/scp"
 
 printf '%s\n' '#!/usr/bin/env bash' \
   'set -euo pipefail' \
   'if [[ "${1:-}" == "--info=help" ]]; then printf '\''progress2\n'\''; exit 0; fi' \
+  'if [[ -n "${MB_MIGRATOR_DESTINATION_PASSWORD:-}" ]]; then [[ " $* " == *" BatchMode=no "* ]] || exit 81; fi' \
   'printf '\''%s\n'\'' "$*" >> "$PUSH_RSYNC_MARKER"' \
   'if [[ ! -e "$PUSH_RSYNC_RETRY_MARKER" ]]; then : > "$PUSH_RSYNC_RETRY_MARKER"; printf '\''simulated broken pipe\n'\'' >&2; exit 12; fi' > "$FAKE_BIN/rsync"
 
@@ -90,7 +98,14 @@ PATH="$FAKE_BIN:$PATH" "$ROOT_DIR/bin/mb-migrator" push-pair complete \
 test -s "$MB_MIGRATOR_SSH_DIR/known_hosts"
 [[ "$(<"$STATE_DIR/push-pairings/current-pairing")" == "$pairing_id" ]]
 
-PATH="$FAKE_BIN:$PATH" "$ROOT_DIR/bin/mb-migrator" push-site \
+MB_MIGRATOR_DESTINATION_PASSWORD=gateway-secret PATH="$FAKE_BIN:$PATH" \
+  "$ROOT_DIR/bin/mb-migrator" push-pair complete \
+    "$pairing_id" newuser@new.example.test \
+    --port=3022 \
+    "--state-dir=$STATE_DIR"
+
+MB_MIGRATOR_DESTINATION_PASSWORD=gateway-secret PATH="$FAKE_BIN:$PATH" \
+  "$ROOT_DIR/bin/mb-migrator" push-site \
   "--state-dir=$STATE_DIR" \
   "--source-root=$SOURCE" \
   --source-db-method=native \
