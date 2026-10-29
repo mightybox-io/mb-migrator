@@ -13,7 +13,10 @@ archive_index() {
   fi
 
   log "Indexing archive contents"
-  tar -tzf "$archive" > "$ARCHIVE_INDEX"
+  case "$archive" in
+    *.zip|*.ZIP) php "$ROOT_DIR/lib/wpengine-zip.php" index "$archive" > "$ARCHIVE_INDEX" ;;
+    *) tar -tzf "$archive" > "$ARCHIVE_INDEX" ;;
+  esac
 }
 
 archive_has_path_prefix() {
@@ -43,5 +46,8 @@ archive_extract_existing_paths() {
   fi
 
   log "Extracting selected archive paths"
-  tar -xzf "$archive" -C "$stage_dir" "${paths[@]}"
+  case "$archive" in
+    *.zip|*.ZIP) php "$ROOT_DIR/lib/wpengine-zip.php" extract "$archive" "$stage_dir" "${paths[@]}" ;;
+    *) tar -xzf "$archive" -C "$stage_dir" "${paths[@]}" ;;
+  esac
 }

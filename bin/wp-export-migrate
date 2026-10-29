@@ -15,6 +15,8 @@ source "$ROOT_DIR/lib/wp-cli.sh"
 source "$ROOT_DIR/providers/gridpane.sh"
 source "$ROOT_DIR/providers/legacy-mightybox.sh"
 source "$ROOT_DIR/providers/wordpress-package.sh"
+source "$ROOT_DIR/providers/wpengine.sh"
+source "$ROOT_DIR/lib/rollback.sh"
 set_log_context restore setup
 
 COMMAND="${1:-}"
@@ -30,7 +32,7 @@ Usage:
   @@PROG@@ doctor --target-root=/srv/htdocs [--archive=ARCHIVE.tar.gz]
 
 Options:
-  --provider=auto|gridpane|legacy-mightybox|wordpress-package
+  --provider=auto|gridpane|legacy-mightybox|wordpress-package|wpengine
                                       Export provider adapter. Default: auto
   --target-root=PATH                WordPress document root to restore into
   --archive=PATH                    Archive path for doctor preflight checks
@@ -44,6 +46,8 @@ Options:
   --include-mu-plugins              Alias for --mu-plugins=copy
   --root-extras=ask|copy|skip       What to do with non-core root files. Default: ask
   --replace-managed-symlinks        Replace destination symlink conflicts instead of preserving them
+  --rollback-dir=PATH               Private backup directory outside the document root
+  --safety=preserve|enable          Preserve existing safeguards or explicitly enable them
   --db-import=ask|yes|no            Import combined SQL with wp db import. Default: ask, default answer yes
   --target-db-method=auto|wp-cli|native
                                       Target database method. Default: auto
@@ -148,10 +152,14 @@ SKIP_DB_BACKUP=0
 SEARCH_REPLACE=0
 MIGRATE_CONFIG=0
 CLEANUP_MODE="ask"
+ROLLBACK_DIR=""
+SAFETY_MODE="preserve"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --provider=*) PROVIDER="${1#*=}" ;;
+    --rollback-dir=*) ROLLBACK_DIR="${1#*=}" ;;
+    --safety=*) SAFETY_MODE="${1#*=}" ;;
     --target-root=*) TARGET_ROOT="${1#*=}" ;;
     --stage-dir=*) STAGE_DIR="${1#*=}" ;;
     --db-output=*) DB_OUTPUT="${1#*=}" ;;
@@ -189,6 +197,7 @@ case "$MU_PLUGINS_MODE" in ask|copy|skip) ;; *) die "--mu-plugins must be ask, c
 case "$ROOT_EXTRAS_MODE" in ask|copy|skip) ;; *) die "--root-extras must be ask, copy, or skip" ;; esac
 case "$DB_IMPORT_MODE" in ask|yes|no) ;; *) die "--db-import must be ask, yes, or no" ;; esac
 case "$TARGET_DB_METHOD" in auto|wp-cli|native) ;; *) die "--target-db-method must be auto, wp-cli, or native" ;; esac
+case "$SAFETY_MODE" in preserve|enable) ;; *) die "--safety must be preserve or enable" ;; esac
 case "$CLEANUP_MODE" in ask|yes|no) ;; *) die "--cleanup must be ask, yes, or no" ;; esac
 if [[ "$DB_IMPORT_MODE" != "no" && "$DRY_RUN" -ne 1 ]]; then
   IMPORT_DB=1
@@ -271,12 +280,19 @@ case "$PROVIDER" in
     elif legacy_mightybox_detect "$ARCHIVE_INDEX"; then
       PROVIDER="legacy-mightybox"
       PROVIDER_ADAPTER="legacy_mightybox"
+    elif wpengine_detect "$ARCHIVE_INDEX"; then
+      PROVIDER="wpengine"
+      PROVIDER_ADAPTER="wpengine"
     elif gridpane_detect "$ARCHIVE_INDEX"; then
       PROVIDER="gridpane"
       PROVIDER_ADAPTER="gridpane"
     else
       die "Could not auto-detect export provider"
     fi
+    ;;
+  wpengine)
+    wpengine_detect "$ARCHIVE_INDEX" || die "Archive does not look like a WP Engine backup"
+    PROVIDER_ADAPTER="wpengine"
     ;;
   gridpane)
     gridpane_detect "$ARCHIVE_INDEX" || die "Archive does not look like a GridPane export"
@@ -335,8 +351,16 @@ combine_database_sql "$STAGE_DIR/$PROVIDER_DB_DIR" "$DB_OUTPUT"
 verify_database_sql "$DB_OUTPUT"
 
 set_log_phase files
+if [[ "$DRY_RUN" -ne 1 ]]; then
+  rollback_prepare "$TARGET_ROOT"
+  if [[ "$SAFETY_MODE" == "enable" ]]; then
+    "$ROOT_DIR/bin/mb-migrator" safety enable "--target-root=$TARGET_ROOT"
+  fi
+fi
 merge_wp_content "$STAGE_DIR/$PROVIDER_WEB_ROOT/wp-content" "$TARGET_ROOT/wp-content"
-copy_web_root_files "$STAGE_DIR/$PROVIDER_WEB_ROOT" "$TARGET_ROOT" "${PROVIDER_ROOT_EXTRA_FILES[@]}"
+if [[ "${#PROVIDER_ROOT_EXTRA_FILES[@]}" -gt 0 ]]; then
+  copy_web_root_files "$STAGE_DIR/$PROVIDER_WEB_ROOT" "$TARGET_ROOT" "${PROVIDER_ROOT_EXTRA_FILES[@]}"
+fi
 SOURCE_WP_CONFIG=""
 SOURCE_USER_CONFIGS=""
 if [[ -n "${PROVIDER_WP_CONFIG_PATH:-}" ]]; then
@@ -365,6 +389,11 @@ if [[ "$SEARCH_REPLACE" -eq 1 ]]; then
   wpcli_search_replace "$TARGET_ROOT" "$OLD_URL" "$NEW_URL"
 fi
 
+if [[ "$DRY_RUN" -ne 1 ]]; then
+  "$ROOT_DIR/bin/mb-migrator" safety status "--target-root=$TARGET_ROOT" --files-only
+  log "Rollback retained outside the document root: $ROLLBACK_DIR"
+  report "Rollback directory: $ROLLBACK_DIR"
+fi
 FINAL_REPORT_FILE="$REPORT_FILE"
 CLEANUP_RAN=0
 CLEANUP_HAS_ITEMS=0

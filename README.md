@@ -639,7 +639,7 @@ In `--dry-run` mode, WP-CLI search-replace is also run with `--dry-run`.
 ## Options
 
 ```text
---provider=auto|gridpane|legacy-mightybox|wordpress-package
+--provider=auto|gridpane|legacy-mightybox|wordpress-package|wpengine
                                   Export provider adapter to use. Default: auto
 --target-root=PATH                WordPress document root to restore into
 --stage-dir=PATH                  Staging directory. Default: target-root/restore-<archive>-<timestamp>
@@ -786,3 +786,120 @@ Potential future adapters:
 ## License
 
 MIT. See `LICENSE`.
+
+## WP Engine backup ZIPs
+
+`restore` auto-detects a WP Engine backup containing `wp-content/mysql.sql`,
+including a backup wrapped in one site directory. PHP 8.0 or newer with the
+`zip` extension is required only for ZIP import. No Python dependency is added.
+The layout follows [WP Engine's backup documentation](https://wpengine.com/support/restore/).
+
+```bash
+mb-migrator restore /path/to/site-backup.zip \
+  --target-root=/srv/htdocs \
+  --old-url=https://old.example.com --new-url=https://new.example.com \
+  --search-replace --safety=enable
+```
+
+The adapter imports the database, plugins, themes, uploads, selected custom MU
+plugins, and approved root files. It excludes WordPress core, source config,
+cache drop-ins, server configuration, and known WPE MU plugins. URL replacement
+uses the existing serialized-safe WP-CLI path. ZIP imports require explicit
+`--old-url` when rewriting URLs. Archives with traversal paths, duplicate entries,
+links, special files, or ambiguous database locations are rejected.
+
+## Relay through an intermediary
+
+When the hosts cannot connect to each other, run this on a workstation that can
+SSH to both. Set up trusted SSH host keys through normal SSH first. Both servers
+and the intermediary need rsync. SSH uses local keys or your existing agent; it
+does not copy private keys or agent access to either host.
+
+```bash
+mb-migrator relay user@source.example.com \
+  --source-root=/sites/example \
+  --source-identity=/path/to/source-key \
+  --destination=user@destination.example.com \
+  --destination-identity=/path/to/destination-key \
+  --target-root=/srv/htdocs \
+  --new-url=https://new.example.com \
+  --db-import=yes --mu-plugins=copy --root-extras=copy --safety=enable --yes
+```
+
+Rerun the same command for catch-up. Each run exports a fresh full database.
+Persistent private caches on the workstation and destination allow rsync to send
+only changed file content, comparing checksums rather than only timestamps.
+The destination cache is compared with the workstation cache before import;
+verification failure stops the import. Source deletions are not propagated.
+Relative safe symlinks are transferred; unsafe absolute links are skipped by the
+relay transport. Use a portable archive if such links need legacy conversion.
+
+Allow enough local disk space for the selected files plus the database. State
+is stored under `~/.local/state/mb-migrator/relay` (or XDG_STATE_HOME); use
+`--state-dir` to choose another volume. Destination state lives under its account's
+`~/.local/state/mb-migrator/relay`. Caches contain private site data and remain
+after success or failure. Remove them after verification and cutover. A lock
+prevents concurrent runs against the same local cache; remove a stale lock only
+after checking that its migration is no longer running.
+
+## Private rollback and managed hosts
+
+Before applying a restore, the migrator records newly added file paths and keeps
+copies of overwritten files. Database imports back up the old database to the
+same private directory unless `--skip-db-backup` was explicitly selected.
+The report prints the rollback path. By default this is a private temporary
+directory outside the web root. For durable storage, pass a new, unused
+`--rollback-dir=/private/path/run-id` outside the document root. Temporary storage
+may be removed by the host. Cleanup of the import stage never removes rollback
+files. Keep enough free space for the database and overwritten files.
+
+```bash
+mb-migrator rollback --target-root=/srv/htdocs \
+  --rollback-dir=/private/path/run-id
+```
+
+Pause writes before rollback. It restores the old database and overwritten files,
+removes files added by the import, and retains migration safety state. Empty
+created directories may remain. Config migration via `--migrate-config` uses its
+existing separate config backups; the rollback command does not restore config.
+Rollback is not a transaction and may be incomplete after an interrupted command;
+keep the rollback directory and inspect any reported error before retrying.
+
+Managed hosts are checked using a read-only database query rather than parsing
+literal DB constants. WP-CLI runs from the document root and retains the host's
+shared-core wrapper. Global plugin/theme flags precede commands. Known WPE MU
+plugins and migrator safety files are excluded from source merges. Destination
+symlinks, including nested managed paths, are preserved by default. Files are
+compared by checksum so same-size, same-timestamp changes are still applied.
+
+## Explicit migration safety and cutover
+
+No new safety guard is installed unless `--safety=enable` is requested or the
+operator runs `safety enable`. A restore preserves an existing guard and reports
+its presence at completion. The guard blocks WordPress mail, ready cron jobs,
+Action Scheduler workers, and WooCommerce Subscriptions automatic processing.
+It does not block third-party services that send mail or charge independently.
+
+```bash
+mb-migrator safety enable --target-root=/srv/htdocs
+mb-migrator safety status --target-root=/srv/htdocs
+mb-migrator safety disable --target-root=/srv/htdocs \
+  --live-url=https://www.example.com
+```
+
+Before releasing safety, disable renewal processing on the old host and finish
+catch-up while writes are paused. DNS changes alone do not stop the old host's
+background jobs. The release command requires the live URL to match WordPress
+home and siteurl, asks for confirmation, updates the native Subscriptions live
+URL when installed, and removes only the exact guard installed by this migrator.
+It checks for any remaining Subscriptions staging override afterward. It never
+silences the banner to conceal staging mode. Existing custom or legacy guards
+must be inspected separately. No source host settings are changed automatically.
+
+The portability and relay smoke suites use synthetic backups and isolated SSH
+stand-ins. Run them alongside the existing regression suites:
+
+```bash
+bash tests/portability-smoke.sh
+bash tests/relay-smoke.sh
+```
