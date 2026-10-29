@@ -19,7 +19,11 @@ wpcli_import_db() {
   if [[ "$method" == "wp-cli" && "$wp_available" -eq 0 ]]; then die "WP-CLI target DB method requested but wp is unavailable"; fi
 
   if [[ "$skip_backup" -ne 1 ]]; then
-    backup="$target_root/db-backup-before-import-$(date +%Y%m%d%H%M%S).sql"
+    if [[ -n "${ROLLBACK_DIR:-}" ]]; then
+      backup="$ROLLBACK_DIR/database-before.sql"
+    else
+      backup="$(mktemp "${TMPDIR:-/tmp}/mb-migrator-db-backup.XXXXXX")"
+    fi
     log "Backing up current database to $backup"
     if [[ "$method" != "native" && "$wp_available" -eq 1 ]] && wp_in_root "$target_root" --skip-plugins --skip-themes db export "$backup"; then
       chmod 600 "$backup"
@@ -101,18 +105,18 @@ wpcli_search_replace() {
   fi
 
   if [[ "${DRY_RUN:-0}" -eq 1 ]]; then
-    wp_in_root "$target_root" search-replace "$old_url" "$new_url" --all-tables-with-prefix --precise --recurse-objects --skip-columns=guid --dry-run
+    wp_in_root "$target_root" --skip-plugins --skip-themes search-replace "$old_url" "$new_url" --all-tables-with-prefix --precise --recurse-objects --skip-columns=guid --dry-run
     return 0
   fi
 
   confirm "Run serialized-safe search-replace from $old_url to $new_url?" || die "Search-replace cancelled"
-  if ! wp_in_root "$target_root" search-replace "$old_url" "$new_url" --all-tables-with-prefix --precise --recurse-objects --skip-columns=guid; then
+  if ! wp_in_root "$target_root" --skip-plugins --skip-themes search-replace "$old_url" "$new_url" --all-tables-with-prefix --precise --recurse-objects --skip-columns=guid; then
     warn "WP-CLI search-replace failed; URL rewrite is pending"
     report "URL rewrite pending: WP-CLI command failed"
     return 0
   fi
   report "Ran search-replace from $old_url to $new_url"
-  if wp_in_root "$target_root" cache flush; then
+  if wp_in_root "$target_root" --skip-plugins --skip-themes cache flush; then
     log "Flushed the WordPress object cache after URL replacement"
     report "WordPress object cache flushed"
   else

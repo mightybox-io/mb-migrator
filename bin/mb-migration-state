@@ -1,0 +1,104 @@
+#!/usr/bin/env bash
+set -euo pipefail
+umask 077
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$ROOT_DIR/lib/util.sh"
+source "$ROOT_DIR/lib/native-db.sh"
+source "$ROOT_DIR/lib/wp-cli.sh"
+set_log_context state setup
+command_name="${1:-}"; [[ $# -eq 0 ]] || shift
+if [[ "$command_name" == --help || -z "$command_name" ]]; then
+  cat <<'EOF'
+Migration state commands:
+  mb-migrator safety enable --target-root=PATH
+  mb-migrator safety status --target-root=PATH
+  mb-migrator safety disable --target-root=PATH --live-url=URL [--yes]
+  mb-migrator rollback --target-root=PATH --rollback-dir=PATH [--yes]
+Safety is opt-in. Disabling it releases mail, scheduled jobs and renewals and
+records the current WooCommerce Subscriptions URL as live when installed.
+Rollback restores overwritten files and the database, and removes newly copied
+files. Run only while writes are paused; it discards changes since the import.
+EOF
+  exit 0
+fi
+operation=""
+if [[ "$command_name" == safety ]]; then operation="${1:-}"; [[ $# -eq 0 ]] || shift; fi
+TARGET_ROOT=""; ROLLBACK_DIR=""; LIVE_URL=""; ASSUME_YES=0; FILES_ONLY=0
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --target-root=*) TARGET_ROOT="${1#*=}" ;;
+    --rollback-dir=*) ROLLBACK_DIR="${1#*=}" ;;
+    --live-url=*) LIVE_URL="${1#*=}" ;;
+    --yes) ASSUME_YES=1 ;;
+    --files-only) FILES_ONLY=1 ;;
+    *) die "Unknown state option: $1" ;;
+  esac
+  shift
+done
+[[ -d "$TARGET_ROOT/wp-content" ]] || die "Expected WordPress --target-root"
+TARGET_ROOT="$(cd "$TARGET_ROOT" && pwd -P)"
+guard="$TARGET_ROOT/wp-content/mu-plugins/mb-migrator-safety.php"
+if [[ "$command_name" == rollback ]]; then
+  [[ -f "$ROLLBACK_DIR/target-root" && "$(cat "$ROLLBACK_DIR/target-root")" == "$TARGET_ROOT" ]] || die "Rollback target does not match"
+  [[ ! -e "$ROLLBACK_DIR/restored" ]] || die "Rollback has already been applied"
+  # Validate the complete additions manifest before deleting anything.
+  while IFS= read -r -d '' path; do
+    case "/$path/" in *'/../'*|*'/./'*|*'//'*) die "Unsafe rollback path" ;; esac
+    parent="$(dirname "$TARGET_ROOT/$path")"
+    while [[ "$parent" != "$TARGET_ROOT" ]]; do
+      [[ ! -L "$parent" ]] || die "Rollback parent is a symlink"
+      parent="$(dirname "$parent")"
+    done
+  done < "$ROLLBACK_DIR/added-files"
+  confirm "Restore database and files from $ROLLBACK_DIR, discarding changes since import?" || die "Rollback cancelled"
+  if [[ -s "$ROLLBACK_DIR/database-before.sql" ]]; then
+    wpcli_import_db "$TARGET_ROOT" "$ROLLBACK_DIR/database-before.sql" 1 0
+  fi
+  while IFS= read -r -d '' path; do rm -f "$TARGET_ROOT/$path"; done < "$ROLLBACK_DIR/added-files"
+  rsync -rlt --checksum --no-owner --no-group "$ROLLBACK_DIR/files/" "$TARGET_ROOT/"
+  touch "$ROLLBACK_DIR/restored"
+  log "Rollback applied. Migration safety state was preserved."
+  exit 0
+fi
+[[ "$command_name" == safety ]] || die "Unknown state command"
+case "$operation" in
+  enable)
+    [[ ! -L "$(dirname "$guard")" ]] || die "MU plugin directory is managed by a symlink; refusing to modify it"
+    if [[ -e "$guard" || -L "$guard" ]]; then
+      cmp -s "$ROOT_DIR/lib/migration-safety.php" "$guard" || die "Safety file differs; refusing to overwrite it"
+    else
+      if [[ ! -d "$(dirname "$guard")" ]]; then
+        mkdir -p "$(dirname "$guard")"
+        chmod 755 "$(dirname "$guard")"
+      fi
+      install -m 644 "$ROOT_DIR/lib/migration-safety.php" "$guard.tmp.$$"
+      mv "$guard.tmp.$$" "$guard"
+    fi
+    log "Safety ENABLED: mail, cron, Action Scheduler and subscription renewals are held"
+    log "Release explicitly: mb-migrator safety disable --target-root=$TARGET_ROOT --live-url=YOUR_LIVE_URL"
+    ;;
+  status)
+    if [[ -f "$guard" ]]; then log "Safety ENABLED: $guard"; else log "Migrator safety not installed"; fi
+    if [[ -f "$TARGET_ROOT/wp-content/mu-plugins/mb-wanp-staging-guard.php" ]]; then
+      warn "Legacy WANP migration guard is still installed; inspect it before cutover"
+    fi
+    if [[ "$FILES_ONLY" -ne 1 ]]; then
+      wp_in_root "$TARGET_ROOT" --skip-plugins --skip-themes eval 'echo "home=" . home_url() . "\n"; echo "mail_hold=" . (has_filter("pre_wp_mail", "__return_false") !== false ? "yes" : "no") . "\n";'
+      wp_in_root "$TARGET_ROOT" eval 'echo "subscriptions_mode=" . (class_exists("WCS_Staging") ? (WCS_Staging::is_duplicate_site() ? "staging" : "live") : "not-installed") . "\n";'
+    fi
+    ;;
+  disable)
+    [[ -n "$LIVE_URL" ]] || die "Releasing safety requires --live-url"
+    [[ -f "$guard" && ! -L "$guard" ]] || die "Migrator safety file is not installed"
+    cmp -s "$ROOT_DIR/lib/migration-safety.php" "$guard" || die "Safety file differs; refusing to remove it"
+    current="$(wp_in_root "$TARGET_ROOT" --skip-plugins --skip-themes option get home)"
+    site="$(wp_in_root "$TARGET_ROOT" --skip-plugins --skip-themes option get siteurl)"
+    [[ "${current%/}" == "${LIVE_URL%/}" && "${site%/}" == "${LIVE_URL%/}" ]] || die "Live URL must match WordPress home and siteurl"
+    confirm "Release mail, jobs and renewals on $LIVE_URL? Ensure the old host cannot process renewals." || die "Safety release cancelled"
+    wp_in_root "$TARGET_ROOT" eval 'if (class_exists("WCS_Staging")) { WCS_Staging::set_duplicate_site_url_lock(); }'
+    rm "$guard"
+    log "Migrator safety removed; native WordPress scheduling and mail are restored"
+    wp_in_root "$TARGET_ROOT" eval 'if (class_exists("WCS_Staging") && WCS_Staging::is_duplicate_site()) { WP_CLI::error("Subscriptions remains in staging mode; another override is active"); }'
+    ;;
+  *) die "Expected safety enable, status or disable" ;;
+esac

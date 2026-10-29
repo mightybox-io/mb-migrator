@@ -7,6 +7,11 @@ merge_wp_content() {
   [[ -d "$source_wp_content" ]] || die "Source wp-content not found: $source_wp_content"
   [[ -d "$dest_wp_content" ]] || die "Destination wp-content not found: $dest_wp_content"
 
+  PROTECTED_WEB_LINKS=""
+  if [[ "${DRY_RUN:-0}" -ne 1 && "${REPLACE_MANAGED_SYMLINKS:-0}" -ne 1 ]]; then
+    PROTECTED_WEB_LINKS="$(mktemp "${TMPDIR:-/tmp}/mb-protected-links.XXXXXX")"
+    find "$dest_wp_content" -type l -print > "$PROTECTED_WEB_LINKS"
+  fi
   log "Overlaying staged plugins, themes, and uploads onto the destination"
   merge_wp_content_subdir "$source_wp_content" "$dest_wp_content" "plugins"
   merge_wp_content_subdir "$source_wp_content" "$dest_wp_content" "themes"
@@ -16,7 +21,10 @@ merge_wp_content() {
     merge_wp_content_subdir "$source_wp_content" "$dest_wp_content" "mu-plugins"
   fi
 
-  materialize_internal_web_symlinks "$source_wp_content" "$dest_wp_content"
+  if [[ "${DRY_RUN:-0}" -ne 1 ]]; then
+    materialize_internal_web_symlinks "$source_wp_content" "$dest_wp_content"
+    [[ -z "$PROTECTED_WEB_LINKS" ]] || rm -f "$PROTECTED_WEB_LINKS"
+  fi
 }
 
 materialize_internal_web_symlinks() {
@@ -42,6 +50,7 @@ materialize_internal_web_symlinks() {
 
       dest_link="$dest_wp_content/${source_link#"$source_wp_content/"}"
       dest_target="$dest_wp_content/$relative_path"
+      if [[ -n "${PROTECTED_WEB_LINKS:-}" ]] && grep -Fxq "$dest_link" "$PROTECTED_WEB_LINKS"; then continue; fi
       [[ -L "$dest_link" && -f "$dest_target" ]] || continue
 
       ln -f "$dest_target" "$dest_link"
@@ -91,7 +100,8 @@ merge_wp_content_subdir() {
 
   mkdir -p "$dest"
 
-  local item name dest_item item_list
+  local item name dest_item item_list protected excluded
+  local -a backup_args
   item_list="$dest/.mb-migrator-items.$$"
   find "$src" -mindepth 1 -maxdepth 1 -print > "$item_list"
 
@@ -105,24 +115,54 @@ merge_wp_content_subdir() {
       continue
     fi
 
+    if [[ "$subdir" == "mu-plugins" ]] && is_platform_mu_plugin_excluded "$name"; then
+      report "Skipped platform MU plugin: $name"
+      continue
+    fi
+
     if [[ -L "$dest_item" && "${REPLACE_MANAGED_SYMLINKS:-0}" -ne 1 ]]; then
       log "Preserving destination symlink: $dest_item"
       report "Preserved destination symlink: $dest_item"
       continue
     fi
 
+    backup_args=()
+    if [[ -n "${PROTECTED_WEB_LINKS:-}" ]]; then
+      while IFS= read -r protected; do
+        case "$protected" in
+          "$dest_item"/*)
+            excluded="${protected#"$dest_item"/}"
+            excluded="$(printf '%s' "$excluded" | sed 's/[][?*\\]/\\&/g')"
+            backup_args+=("--exclude=/$excluded") ;;
+        esac
+      done < "$PROTECTED_WEB_LINKS"
+    fi
+    if [[ -n "${ROLLBACK_DIR:-}" ]]; then
+      rollback_record_added "$item" "$dest_item" "wp-content/$subdir/$name"
+      if [[ ! -d "$item" ]]; then backup_args+=(--backup "--backup-dir=$ROLLBACK_DIR/files/wp-content/$subdir"); fi
+    fi
     if [[ -d "$item" ]]; then
+      if [[ -n "${ROLLBACK_DIR:-}" ]]; then
+        backup_args+=(--backup "--backup-dir=$ROLLBACK_DIR/files/wp-content/$subdir/$name")
+      fi
       mkdir -p "$dest_item"
-      rsync -rlt --perms --chmod=Du=rwx,Dgo=rx,Fu=rw,Fgo=r \
+      rsync -rlt --checksum "${backup_args[@]}" --perms --chmod=Du=rwx,Dgo=rx,Fu=rw,Fgo=r \
         --no-owner --no-group --omit-dir-times "$item/" "$dest_item/"
     else
-      rsync -rlt --perms --chmod=Fu=rw,Fgo=r \
+      rsync -rlt --checksum "${backup_args[@]}" --perms --chmod=Fu=rw,Fgo=r \
         --no-owner --no-group --omit-dir-times "$item" "$dest/"
     fi
   done < "$item_list"
   rm -f "$item_list"
 
   report "Merged wp-content/$subdir from $src to $dest"
+}
+
+is_platform_mu_plugin_excluded() {
+  case "$1" in
+    mu-plugin.php|wpengine-*|wpe-*|force-strong-passwords|slt-force-strong-passwords.php|stop-long-comments.php|mb-migrator-safety.php|mb-wanp-staging-guard.php) return 0 ;;
+  esac
+  return 1
 }
 
 is_platform_plugin_excluded() {
@@ -169,7 +209,16 @@ copy_web_root_files() {
       continue
     fi
 
-    rsync -lt --perms --chmod=Fu=rw,Fgo=r \
+    if [[ -L "$target_file" && "${REPLACE_MANAGED_SYMLINKS:-0}" -ne 1 ]]; then
+      report "Preserved destination root symlink: $target_file"
+      continue
+    fi
+    local -a backup_args=()
+    if [[ -n "${ROLLBACK_DIR:-}" ]]; then
+      rollback_record_added "$source_file" "$target_file" "$relative_name"
+      backup_args=(--backup "--backup-dir=$ROLLBACK_DIR/files")
+    fi
+    rsync -lt --checksum "${backup_args[@]}" --perms --chmod=Fu=rw,Fgo=r \
       --no-owner --no-group --omit-dir-times "$source_file" "$target_file"
     report "Copied root-level file from $source_file to $target_file"
   done

@@ -139,7 +139,7 @@ preflight_environment() {
   done
 
   if [[ "$import_db" -eq 1 ]]; then
-    if command -v wp >/dev/null 2>&1 && wp_in_root "$target_root" --skip-plugins --skip-themes config get DB_NAME --type=constant --quiet >/dev/null 2>&1; then
+    if command -v wp >/dev/null 2>&1 && wp_in_root "$target_root" --skip-plugins --skip-themes db query "SELECT 1" --skip-column-names >/dev/null 2>&1; then
       wp_usable=1
     fi
     if [[ "$target_db_method" != "native" && "$wp_usable" -eq 1 ]]; then

@@ -251,7 +251,7 @@ pull_command() {
     mkdir -p "$migration_dir/work/htdocs/wp-content"
     printf -v quoted_identity '%q' "$IDENTITY_FILE"
     ssh_transport="ssh -p $SSH_PORT -i $quoted_identity"
-    rsync -az --no-perms --no-owner --no-group -e "$ssh_transport" "$SSH_SOURCE:$SOURCE_ROOT/wp-content/" "$migration_dir/work/htdocs/wp-content/"
+    rsync -az --checksum --safe-links --no-perms --no-owner --no-group -e "$ssh_transport" "$SSH_SOURCE:$SOURCE_ROOT/wp-content/" "$migration_dir/work/htdocs/wp-content/"
     ssh_remote archive-root "$SOURCE_ROOT" "$SOURCE_DB_METHOD" > "$run_tmp/root.tar.gz"
     tar -xzf "$run_tmp/root.tar.gz" -C "$migration_dir/work/htdocs"
   else

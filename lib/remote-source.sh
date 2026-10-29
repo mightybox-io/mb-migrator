@@ -22,10 +22,15 @@ else
   fail "wp-config.php is not readable in the source root or its GridPane parent: $source_root"
 fi
 
+source_wp() (
+  cd "$source_root" || return 1
+  wp "$@"
+)
+
 config_value() {
   local key="$1" type="${2:-constant}" value=""
   if command -v wp >/dev/null 2>&1; then
-    if value="$(wp --path="$source_root" --skip-plugins --skip-themes config get "$key" --type="$type" --quiet 2>/dev/null)"; then
+    if value="$(source_wp --skip-plugins --skip-themes config get "$key" --type="$type" --quiet 2>/dev/null)"; then
       printf '%s' "$value"
       return 0
     fi
@@ -54,7 +59,7 @@ config_value() {
 
 is_multisite() {
   local value=""
-  if command -v wp >/dev/null 2>&1 && wp --path="$source_root" --skip-plugins --skip-themes core is-installed --network >/dev/null 2>&1; then
+  if command -v wp >/dev/null 2>&1 && source_wp --skip-plugins --skip-themes core is-installed --network >/dev/null 2>&1; then
     return 0
   fi
   value="$(config_value MULTISITE 2>/dev/null || true)"
@@ -126,7 +131,7 @@ native_dump() (
 get_source_url() (
   local value="" client_bin cnf prefix
   if command -v wp >/dev/null 2>&1; then
-    if value="$(wp --path="$source_root" --skip-plugins --skip-themes option get home --quiet 2>/dev/null)" && [[ -n "$value" ]]; then
+    if value="$(source_wp --skip-plugins --skip-themes option get home --quiet 2>/dev/null)" && [[ -n "$value" ]]; then
       printf '%s\n' "$value"
       return 0
     fi
@@ -152,14 +157,14 @@ export_database() (
   chmod 600 "$dump_file"
   trap 'rm -f "$dump_file"' EXIT
   if [[ "$db_method" != "native" ]] && command -v wp >/dev/null 2>&1; then
-    wp_export_args=(--path="$source_root" --skip-plugins --skip-themes db export "$dump_file" --quiet)
+    wp_export_args=(--skip-plugins --skip-themes --quiet db export "$dump_file")
     if command -v mysqldump >/dev/null 2>&1; then
       wp_dump_bin="$(command -v mysqldump)"
       if dump_supports_column_statistics "$wp_dump_bin"; then
         wp_export_args+=(--column-statistics=0)
       fi
     fi
-    if wp "${wp_export_args[@]}" >&2; then
+    if source_wp "${wp_export_args[@]}" >&2; then
       cat "$dump_file"
       return 0
     fi
@@ -172,7 +177,7 @@ export_database() (
 
 check_database_export() {
   local wp_ok=0 native_ok=0 ignored
-  if command -v wp >/dev/null 2>&1 && wp --path="$source_root" --skip-plugins --skip-themes config get DB_NAME --type=constant --quiet >/dev/null 2>&1; then
+  if command -v wp >/dev/null 2>&1 && source_wp --skip-plugins --skip-themes db query "SELECT 1" --skip-column-names >/dev/null 2>&1; then
     wp_ok=1
   fi
   if command -v php >/dev/null 2>&1 && { command -v mariadb-dump >/dev/null 2>&1 || command -v mysqldump >/dev/null 2>&1; }; then

@@ -46,6 +46,8 @@ PATH="$FAKE_BIN:$PATH" bash -c '
   source "$1/lib/wp-cli.sh"
   TARGET_DB_METHOD=native
   DRY_RUN=0
+  ROLLBACK_DIR="$2/rollback"
+  mkdir -p "$ROLLBACK_DIR"
   REPORT_FILE="$2/report"
   ASSUME_YES=1
   preflight_environment "$2/target" "" 1 0 native
@@ -53,7 +55,7 @@ PATH="$FAKE_BIN:$PATH" bash -c '
 ' bash "$ROOT_DIR" "$TEST_ROOT"
 
 test -f "$NATIVE_IMPORT_MARKER"
-backup="$(find "$TARGET" -name 'db-backup-before-import-*.sql' -type f | head -n 1)"
+backup="$TEST_ROOT/rollback/database-before.sql"
 test -s "$backup"
 
 export DB_NAME="environment_db"
